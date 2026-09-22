@@ -1,0 +1,12 @@
+import { prisma } from "../prisma.js";
+const MAX_ATTEMPTS=100;
+export function randomFiveDigits(){return String(Math.floor(10000+Math.random()*90000));}
+async function uniqueCode<T>(exists:(id:string)=>Promise<T|null>){for(let i=0;i<MAX_ATTEMPTS;i++){const id=randomFiveDigits();if(!(await exists(id)))return id;}throw new Error("Unable to allocate a unique five-digit identifier.");}
+export const uniqueUserId=()=>uniqueCode(id=>prisma.user.findUnique({where:{id}}));
+export const uniqueMovieId=()=>uniqueCode(id=>prisma.movie.findUnique({where:{id}}));
+export const uniqueHistoryId=()=>uniqueCode(id=>prisma.movieHistory.findUnique({where:{id}}));
+export const uniqueMessageId=()=>uniqueCode(id=>prisma.message.findUnique({where:{id}}));
+export const uniqueSettingId=()=>uniqueCode(id=>prisma.setting.findUnique({where:{id}}));
+export const uniqueWalletTransactionId=()=>uniqueCode(id=>prisma.walletTransaction.findUnique({where:{id}}));
+export const uniqueTaskId=()=>uniqueCode(id=>prisma.task.findUnique({where:{id}}));
+export const uniqueInviteCode=()=>uniqueCode(code=>prisma.user.findUnique({where:{inviteCode:code}}));

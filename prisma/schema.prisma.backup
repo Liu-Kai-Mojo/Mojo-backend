@@ -1,0 +1,98 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+enum Role { OWNER ADMIN CLIENT }
+enum IdentifierType { EMAIL PHONE }
+enum MessageStatus { OPEN REPLIED CLOSED }
+enum TaskStatus { PENDING COMPLETED }
+model User {
+  id String @id @db.VarChar(5)
+  name String
+  identifier String @unique
+  identifierType IdentifierType
+  passwordHash String
+  role Role
+  active Boolean @default(true)
+  inviteCode String? @unique @db.VarChar(5)
+  adminId String? @db.VarChar(5)
+  balanceCents Int @default(0)
+  welcomeBonusGrantedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  messagesSent Message[] @relation("SenderMessages")
+  messagesOwned Message[] @relation("RecipientMessages")
+  history MovieHistory[]
+  admin User? @relation("AdminClients", fields: [adminId], references: [id], onDelete: SetNull)
+  managedClients User[] @relation("AdminClients")
+  walletTransactions WalletTransaction[]
+  tasks Task[] @relation("ClientTasks")
+  taskAssignments Task[] @relation("TaskAssignedBy")
+  @@index([adminId])
+}
+model Movie {
+  id String @id @db.VarChar(5)
+  title String
+  genre String
+  year Int
+  duration Int
+  rating Float @default(0)
+  description String
+  posterUrl String
+  backdropUrl String?
+  published Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  history MovieHistory[]
+}
+model MovieHistory {
+  id String @id @db.VarChar(5)
+  userId String @db.VarChar(5)
+  movieId String @db.VarChar(5)
+  viewedAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  @@index([userId, viewedAt])
+}
+model Message {
+  id String @id @db.VarChar(5)
+  senderId String @db.VarChar(5)
+  recipientId String? @db.VarChar(5)
+  subject String
+  body String
+  status MessageStatus @default(OPEN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sender User @relation("SenderMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User? @relation("RecipientMessages", fields: [recipientId], references: [id], onDelete: SetNull)
+  @@index([senderId, createdAt])
+  @@index([recipientId, createdAt])
+}
+model Setting { id String @id @db.VarChar(5); key String @unique; value String; updatedAt DateTime @updatedAt }
+model WalletTransaction {
+  id String @id @db.VarChar(5)
+  userId String @db.VarChar(5)
+  amountCents Int
+  type String
+  note String
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt])
+}
+model Task {
+  id String @id @db.VarChar(5)
+  clientId String @db.VarChar(5)
+  assignedById String? @db.VarChar(5)
+  sequence Int
+  title String
+  amountCents Int
+  commissionCents Int
+  status TaskStatus @default(PENDING)
+  isLucky Boolean @default(false)
+  revealedAt DateTime?
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  client User @relation("ClientTasks", fields: [clientId], references: [id], onDelete: Cascade)
+  assignedBy User? @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  @@unique([clientId, sequence])
+  @@index([clientId, status, sequence])
+}
