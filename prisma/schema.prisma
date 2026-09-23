@@ -49,6 +49,8 @@ model User {
   history               MovieHistory[]
   admin                 User?               @relation("AdminClients", fields: [adminId], references: [id], onDelete: SetNull)
   managedClients        User[]              @relation("AdminClients")
+  auditActions          AuditLog[]           @relation("AuditActor")
+  auditTargets          AuditLog[]           @relation("AuditTarget")
   walletTransactions    WalletTransaction[]
   tasks                 Task[]              @relation("ClientTasks")
   taskAssignments       Task[]              @relation("TaskAssignedBy")
@@ -142,4 +144,20 @@ model Task {
 
   @@unique([clientId, sequence])
   @@index([clientId, status, sequence])
+}
+
+
+model AuditLog {
+  id         String   @id @db.VarChar(5)
+  actorId    String?  @db.VarChar(5)
+  targetId   String?  @db.VarChar(5)
+  action     String
+  details    String?
+  createdAt  DateTime @default(now())
+
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  target     User?    @relation("AuditTarget", fields: [targetId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([targetId, createdAt])
 }
