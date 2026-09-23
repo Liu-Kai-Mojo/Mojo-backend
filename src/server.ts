@@ -85,6 +85,12 @@ app.post("/api/auth/register",asyncRoute(async(req,res)=>{
 app.post("/api/auth/login",asyncRoute(async(req,res)=>{const d=loginSchema.parse(req.body);const identifier=d.identifier.trim().includes("@")?d.identifier.trim().toLowerCase():d.identifier.trim();const user=await prisma.user.findUnique({where:{identifier}});if(!user)return res.status(401).json({error:"We could not find an account with that email or phone number."});if(!user.active)return res.status(403).json({error:"This account is currently paused. Please contact the workspace owner."});if(!(await verifyPassword(d.password,user.passwordHash)))return res.status(401).json({error:"The password does not match this account."});const token=issueToken({id:user.id,role:user.role});return res.json({token,user:safeUser(user),message:"Welcome back."});}));
 app.get("/api/me",auth(),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)});}));
 
+app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const client=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub},select:{adminId:true}});
+  const admin=client.adminId?await prisma.user.findFirst({where:{id:client.adminId,role:Role.ADMIN,active:true},select:{id:true,name:true}}):null;
+  const setting=admin?await prisma.setting.findUnique({where:{key:`telegram_admin_${admin.id}`}}):null;
+  res.json({admin:admin?{id:admin.id,name:admin.name}:null,telegramUsername:setting?.value||null});
+}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.task.findMany({where:{clientId:userId},orderBy:{sequence:"asc"}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),transactions:txs,messages});}));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
@@ -92,7 +98,34 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
 app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{const id=param(req,"id");const clientId=res.locals.auth.sub;const task=await prisma.task.findFirst({where:{id,clientId}});if(!task)return res.status(404).json({error:"Task not found."});const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before continuing."});if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});const result=await prisma.$transaction(async tx=>{const fresh=await tx.task.findUniqueOrThrow({where:{id}});if(fresh.status!==TaskStatus.PENDING)throw new Error("This task has already been completed.");const user=await tx.user.update({where:{id:clientId},data:{balanceCents:{increment:fresh.commissionCents}}});const completed=await tx.task.update({where:{id},data:{status:TaskStatus.COMPLETED,completedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:clientId,amountCents:fresh.commissionCents,type:"TASK_COMMISSION",note:`Task #${fresh.sequence} commission`}});return {user,task:completed};});res.json({user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task completed and your balance has been updated."});}));
 app.get("/api/client/messages",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const messages=await prisma.message.findMany({where:{OR:[{senderId:res.locals.auth.sub},{recipientId:res.locals.auth.sub}]},orderBy:{createdAt:"desc"}});res.json({messages});}));
 app.post("/api/client/messages",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{const d=messageSchema.parse(req.body);const sender=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub},select:{adminId:true}});const recipient=d.recipientId?await prisma.user.findFirst({where:{id:d.recipientId,role:{in:[Role.ADMIN,Role.OWNER]},active:true}}):sender.adminId?await prisma.user.findFirst({where:{id:sender.adminId,role:Role.ADMIN,active:true}}):null;if(!recipient)return res.status(400).json({error:"Your account is not currently connected to an active administrator."});const msg=await prisma.message.create({data:{id:await uniqueMessageId(),senderId:res.locals.auth.sub,recipientId:recipient.id,subject:d.subject,body:d.body}});res.status(201).json({message:msg});}));
-app.get("/api/client/account",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)});}));
+app.get("/api/client/account",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});
+  const wallet=await prisma.setting.findUnique({where:{key:`wallet_client_${u.id}`}});
+  res.json({user:safeUser(u),walletAddress:wallet?.value||""});
+}));
+app.patch("/api/client/account/password",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const d=z.object({currentPassword:z.string().min(1).max(100),newPassword:z.string().min(6).max(100)}).parse(req.body);
+  const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});
+  if(!(await verifyPassword(d.currentPassword,u.passwordHash)))return res.status(400).json({error:"Your current password is not correct."});
+  await prisma.user.update({where:{id:u.id},data:{passwordHash:await hashPassword(d.newPassword)}});
+  await audit(u.id,u.id,"CLIENT_LOGIN_PASSWORD_CHANGED");
+  res.json({message:"Login password updated successfully."});
+}));
+app.patch("/api/client/account/withdrawal-password",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const d=z.object({currentPassword:z.string().min(1).max(100),newPassword:z.string().min(6).max(100)}).parse(req.body);
+  const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});
+  if(!u.withdrawalPasswordHash||!(await verifyPassword(d.currentPassword,u.withdrawalPasswordHash)))return res.status(400).json({error:"Your current withdrawal password is not correct."});
+  await prisma.user.update({where:{id:u.id},data:{withdrawalPasswordHash:await hashPassword(d.newPassword)}});
+  await audit(u.id,u.id,"CLIENT_WITHDRAWAL_PASSWORD_CHANGED");
+  res.json({message:"Withdrawal password updated successfully."});
+}));
+app.patch("/api/client/account/wallet",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const d=z.object({address:z.string().trim().min(3).max(160)}).parse(req.body);
+  const key=`wallet_client_${res.locals.auth.sub}`;
+  const setting=await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:d.address},update:{value:d.address}});
+  await audit(res.locals.auth.sub,res.locals.auth.sub,"CLIENT_WALLET_UPDATED");
+  res.json({walletAddress:setting.value,message:"Wallet address saved successfully."});
+}));
 
 const staff=[Role.OWNER,Role.ADMIN];
 app.get("/api/admin/dashboard",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const where=staffWhere(role,res.locals.auth.sub);const [clients,admins,messages,pendingTasks,completedTasks]=await Promise.all([prisma.user.count({where:{...where,active:true}}),prisma.user.count({where:{role:Role.ADMIN,active:true}}),prisma.message.count({where:role===Role.OWNER?{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]}}:{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]},OR:[{recipientId:res.locals.auth.sub},{sender:{adminId:res.locals.auth.sub}}]}}),prisma.task.count({where:{status:TaskStatus.PENDING,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}}),prisma.task.count({where:{status:TaskStatus.COMPLETED,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}})]);res.json({clients,admins,messages,pendingTasks,completedTasks});}));
@@ -168,11 +201,18 @@ app.get("/api/admin/messages",auth(staff),asyncRoute(async(_req,res)=>{const rol
 app.post("/api/admin/clients/:id/messages",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=messageSchema.omit({recipientId:true}).parse(req.body);const c=await prisma.user.findFirst({where:{id,role:Role.CLIENT,adminId:res.locals.auth.sub,active:true}});if(!c)return res.status(404).json({error:"Client not found in your workspace."});const msg=await prisma.message.create({data:{id:await uniqueMessageId(),senderId:res.locals.auth.sub,recipientId:c.id,subject:d.subject,body:d.body}});res.status(201).json({message:msg});}));
 app.patch("/api/admin/messages/:id",auth(staff),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({status:z.enum(["OPEN","REPLIED","CLOSED"]),reply:z.string().max(3000).optional()}).parse(req.body);const current=await prisma.message.findUniqueOrThrow({where:{id},include:{sender:{select:{id:true,role:true,adminId:true}}}});if(res.locals.auth.role===Role.ADMIN&&current.sender.role===Role.CLIENT&&current.sender.adminId!==res.locals.auth.sub)return res.status(403).json({error:"This conversation is outside your workspace."});let reply=null;if(d.reply?.trim())reply=await prisma.message.create({data:{id:await uniqueMessageId(),senderId:res.locals.auth.sub,recipientId:current.senderId,subject:`Re: ${current.subject}`,body:d.reply.trim(),status:MessageStatus.REPLIED}});const message=await prisma.message.update({where:{id},data:{status:d.status}});res.json({message,reply});}));
 
-app.get("/api/owner/admins",auth([Role.OWNER]),asyncRoute(async(_req,res)=>{const admins=await prisma.user.findMany({where:{role:Role.ADMIN},orderBy:{createdAt:"desc"}});res.json({admins:admins.map(a=>({...safeUser(a),inviteCode:a.inviteCode}))});}));
+app.get("/api/owner/admins",auth([Role.OWNER]),asyncRoute(async(_req,res)=>{
+  const admins=await prisma.user.findMany({where:{role:Role.ADMIN},orderBy:{createdAt:"desc"}});
+  const rows=await Promise.all(admins.map(async a=>{
+    const setting=await prisma.setting.findUnique({where:{key:`telegram_admin_${a.id}`}});
+    return {...safeUser(a),inviteCode:a.inviteCode,telegramUsername:setting?.value||""};
+  }));
+  res.json({admins:rows});
+}));
 app.post("/api/owner/admins",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100)}).parse(req.body);const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});const inviteCode=await uniqueInviteCode();const admin=await prisma.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.ADMIN,inviteCode}});await audit(res.locals.auth.sub,admin.id,"ADMIN_CREATED",{inviteCode});res.status(201).json({admin:{...safeUser(admin),inviteCode},message:"Admin created successfully."});}));
 app.patch("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");
-  const d=z.object({name:z.string().trim().min(2).max(80).optional(),identifier:z.string().trim().min(5).max(120).optional(),password:z.string().min(6).max(100).optional(),active:z.boolean().optional()}).parse(req.body);
+  const d=z.object({name:z.string().trim().min(2).max(80).optional(),identifier:z.string().trim().min(5).max(120).optional(),password:z.string().min(6).max(100).optional(),active:z.boolean().optional(),telegramUsername:z.string().trim().max(120).optional()}).parse(req.body);
   const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});
   if(!admin)return res.status(404).json({error:"Admin not found."});
   let identifier=admin.identifier;
@@ -183,8 +223,10 @@ app.patch("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>
   if(d.password!==undefined)data.passwordHash=await hashPassword(d.password);
   if(d.active!==undefined)data.active=d.active;
   const u=await prisma.user.update({where:{id},data});
-  await audit(res.locals.auth.sub,id,"ADMIN_UPDATED",{fields:Object.keys(data)});
-  res.json({admin:{...safeUser(u),inviteCode:u.inviteCode},message:"Admin changes saved."});
+  if(d.telegramUsername!==undefined){const key=`telegram_admin_${id}`;if(d.telegramUsername.trim())await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:d.telegramUsername.trim().replace(/^@/,"")},update:{value:d.telegramUsername.trim().replace(/^@/,"")}});else await prisma.setting.deleteMany({where:{key}});}
+  const telegramSetting=await prisma.setting.findUnique({where:{key:`telegram_admin_${id}`}});
+  await audit(res.locals.auth.sub,id,"ADMIN_UPDATED",{fields:[...Object.keys(data),...(d.telegramUsername!==undefined?["telegramUsername"]:[])]});
+  res.json({admin:{...safeUser(u),inviteCode:u.inviteCode,telegramUsername:telegramSetting?.value||""},message:"Admin changes saved."});
 }));
 app.delete("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});if(!admin)return res.status(404).json({error:"Admin not found."});await audit(res.locals.auth.sub,id,"ADMIN_DELETED");await prisma.user.delete({where:{id}});res.json({message:"Admin removed."});}));
 app.post("/api/owner/clients",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100),adminId:z.string().regex(/^\d{5}$/)}).parse(req.body);const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;const admin=await prisma.user.findFirst({where:{id:d.adminId,role:Role.ADMIN,active:true}});if(!admin)return res.status(400).json({error:"Choose an active administrator."});if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});const u=await prisma.$transaction(async tx=>{const c=await tx.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.CLIENT,adminId:admin.id,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:c.id,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});return c;});res.status(201).json({client:safeUser(u),message:"Client created successfully."});}));
@@ -194,7 +236,8 @@ app.get("/api/owner/users/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{
   const user=await prisma.user.findUnique({where:{id},include:{admin:{select:{id:true,name:true,identifier:true,active:true}},managedClients:{select:{id:true,name:true,identifier:true,active:true}},walletTransactions:{orderBy:{createdAt:"desc"},take:30},tasks:{orderBy:{sequence:"asc"}},messagesSent:{orderBy:{createdAt:"desc"},take:20},messagesOwned:{orderBy:{createdAt:"desc"},take:20}}});
   if(!user||user.role===Role.OWNER)return res.status(404).json({error:"Account not found."});
   const auditLogs=await prisma.auditLog.findMany({where:{OR:[{targetId:id},{actorId:id}]},orderBy:{createdAt:"desc"},take:50});
-  res.json({user:{...safeUser(user),inviteCode:user.role===Role.ADMIN?user.inviteCode:null},admin:user.admin?{id:user.admin.id,name:user.admin.name,identifier:user.admin.identifier,active:user.admin.active}:null,clients:user.managedClients.map(safeUser),transactions:user.walletTransactions,tasks:user.tasks.map(t=>taskPublic(t,true)),messages:[...user.messagesSent,...user.messagesOwned],auditLogs});
+  const telegramSetting=user.role===Role.ADMIN?await prisma.setting.findUnique({where:{key:`telegram_admin_${id}`} }):null;
+  res.json({user:{...safeUser(user),inviteCode:user.role===Role.ADMIN?user.inviteCode:null,telegramUsername:telegramSetting?.value||""},admin:user.admin?{id:user.admin.id,name:user.admin.name,identifier:user.admin.identifier,active:user.admin.active}:null,clients:user.managedClients.map(safeUser),transactions:user.walletTransactions,tasks:user.tasks.map(t=>taskPublic(t,true)),messages:[...user.messagesSent,...user.messagesOwned],auditLogs});
 }));
 app.get("/api/owner/audit",auth([Role.OWNER]),asyncRoute(async(req,res)=>{
   const take=Math.min(Number(req.query.take||100),250);
