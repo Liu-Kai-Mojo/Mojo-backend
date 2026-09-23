@@ -36,7 +36,7 @@ async function audit(actorId:string|undefined, targetId:string|undefined, action
   });
 }
 async function ensureOwnerFromEnv(){
-  const identifierRaw=process.env.OWNER_IDENTIFIER?.trim();
+  const identifierRaw=(process.env.OWNER_EMAIL||process.env.OWNER_IDENTIFIER)?.trim();
   const password=process.env.OWNER_PASSWORD?.trim();
   if(!identifierRaw||!password)return;
   const identifier=identifierRaw.includes("@")?identifierRaw.toLowerCase():identifierRaw;
