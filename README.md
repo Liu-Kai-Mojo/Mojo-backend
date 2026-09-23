@@ -38,6 +38,8 @@ The repository includes a `Dockerfile` so Railway can build the service directly
 5. applies committed Prisma migrations in the running process and exposes protected API routes only after the database is ready.
 
 Required Railway variables:
+- `OWNER_EMAIL` — owner sign-in email used to bootstrap the Owner account
+- `OWNER_PASSWORD` — owner sign-in password used to bootstrap the Owner account
 
 - `DATABASE_URL` — PostgreSQL connection string
 - `JWT_SECRET` — random secret of at least 32 characters
