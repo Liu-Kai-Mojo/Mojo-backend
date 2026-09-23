@@ -62,6 +62,26 @@ async function ensureTaskBatch(clientId:string,assignedById?:string){
   const user=await prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}});
   await prisma.$transaction(async tx=>{for(let i=count+1;i<=30;i++){const amount=defaultTaskAmount(user.balanceCents,i);await tx.task.create({data:{id:await uniqueTaskId(),clientId,assignedById,sequence:i,title:i===2?"Lucky combination":"Daily task",amountCents:amount,commissionCents:defaultCommission(amount),isLucky:i===2}});}});
 }
+async function fetchMovieFeed(){
+  const titles=["Resident Evil","Practical Magic 2","Spider-Man: Brand New Day","The Odyssey","Coyote vs. Acme","Runner","Daniel and the Fiery Furnace","The Transformers: The Movie","The Weight","Buddy","Insidious: Out of the Further","PAW Patrol: The Dino Movie","Toy Story 5","Moana","Obsession","Avengers: Secret Wars","Super Mario Galaxy Movie","The Hunger Games: Sunrise on the Reaping"];
+  const key=process.env.TMDB_API_KEY||"";
+  const token=process.env.TMDB_API_READ_ACCESS_TOKEN||"";
+  const out:any[]=[];
+  for(const title of titles){
+    let posterUrl="";
+    if(key||token){
+      try{
+        const base="https://api.themoviedb.org/3/search/movie?query="+encodeURIComponent(title)+"&include_adult=false&language=en-US&page=1";
+        const url=token?base:base+"&api_key="+encodeURIComponent(key);
+        const rr=await fetch(url,{headers:token?{Authorization:"Bearer "+token}:{"accept":"application/json"}});
+        const jj:any=await rr.json(); const hit=jj.results?.[0];
+        if(hit?.poster_path)posterUrl="https://image.tmdb.org/t/p/w500"+hit.poster_path;
+      }catch{}
+    }
+    out.push({title,posterUrl,priceCents:null});
+  }
+  return out;
+}
 function taskPublic(t:any,includeValues=false){return {id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,revealedAt:t.revealedAt,completedAt:t.completedAt,...(includeValues?{amountCents:t.amountCents,commissionCents:t.commissionCents}: {})};}
 function staffWhere(role:Role,id:string){return role===Role.OWNER?{role:Role.CLIENT}:{role:Role.CLIENT,adminId:id};}
 function canManageClient(role:Role,id:string,clientId:string){return prisma.user.findFirst({where:{id:clientId,role:Role.CLIENT,...(role===Role.ADMIN?{adminId:id}:{})}});}
@@ -91,6 +111,7 @@ app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const setting=admin?await prisma.setting.findUnique({where:{key:`telegram_admin_${admin.id}`}}):null;
   res.json({admin:admin?{id:admin.id,name:admin.name}:null,telegramUsername:setting?.value||null});
 }));
+app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const movies=await fetchMovieFeed();res.json({movies});}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.task.findMany({where:{clientId:userId},orderBy:{sequence:"asc"}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),transactions:txs,messages});}));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
