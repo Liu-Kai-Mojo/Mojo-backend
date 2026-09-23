@@ -23,7 +23,7 @@ app.use(express.json({limit:"2mb"}));
 app.use((req,res,next)=>{if(req.path.startsWith("/api/"))res.setHeader("Cache-Control","no-store");next();});
 
 function detectIdentifier(v:string){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)?IdentifierType.EMAIL:IdentifierType.PHONE;}
-function safeUser(u:any){return {id:u.id,name:u.name,identifier:u.identifier,identifierType:u.identifierType,role:u.role,active:u.active,adminId:u.adminId??null,balanceCents:u.balanceCents??0,welcomeBonusGrantedAt:u.welcomeBonusGrantedAt??null,createdAt:u.createdAt,...(u.role===Role.ADMIN?{inviteCode:u.inviteCode??null}:{})};}
+function safeUser(u:any){return {id:u.id,name:u.name,identifier:u.identifier,identifierType:u.identifierType,role:u.role,active:u.active,adminId:u.adminId??null,balanceCents:u.balanceCents??0,frozenCents:u.frozenCents??0,creditScore:u.creditScore??1000,welcomeBonusGrantedAt:u.welcomeBonusGrantedAt??null,createdAt:u.createdAt,...(u.role===Role.ADMIN?{inviteCode:u.inviteCode??null}:{})};}
 async function audit(actorId:string|undefined, targetId:string|undefined, action:string, details?:unknown){
   await prisma.auditLog.create({
     data:{
@@ -97,6 +97,40 @@ app.get("/api/client/account",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{c
 const staff=[Role.OWNER,Role.ADMIN];
 app.get("/api/admin/dashboard",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const where=staffWhere(role,res.locals.auth.sub);const [clients,admins,messages,pendingTasks,completedTasks]=await Promise.all([prisma.user.count({where:{...where,active:true}}),prisma.user.count({where:{role:Role.ADMIN,active:true}}),prisma.message.count({where:role===Role.OWNER?{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]}}:{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]},OR:[{recipientId:res.locals.auth.sub},{sender:{adminId:res.locals.auth.sub}}]}}),prisma.task.count({where:{status:TaskStatus.PENDING,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}}),prisma.task.count({where:{status:TaskStatus.COMPLETED,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}})]);res.json({clients,admins,messages,pendingTasks,completedTasks});}));
 app.get("/api/admin/clients",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const clients=await prisma.user.findMany({where:staffWhere(role,res.locals.auth.sub),orderBy:{createdAt:"desc"}});res.json({clients:clients.map(safeUser)});}));
+app.get("/api/admin/balances",auth([Role.ADMIN]),asyncRoute(async(_req,res)=>{
+  const clients=await prisma.user.findMany({where:{role:Role.CLIENT,adminId:res.locals.auth.sub},orderBy:{createdAt:"desc"}});
+  res.json({balances:clients.map(u=>({...safeUser(u),availableCents:Math.max(0,u.balanceCents-(u.frozenCents??0))}))});
+}));
+
+app.patch("/api/admin/balances/:id",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");
+  const d=z.object({frozenCents:z.coerce.number().int().min(0).max(100000000).optional(),creditScore:z.coerce.number().int().min(0).max(10000).optional()}).refine(v=>v.frozenCents!==undefined||v.creditScore!==undefined,{message:"Please provide a balance control value."}).parse(req.body||{});
+  const current=await prisma.user.findFirst({where:{id,role:Role.CLIENT,adminId:res.locals.auth.sub}});
+  if(!current)return res.status(404).json({error:"Client not found in your workspace."});
+  if(d.frozenCents!==undefined&&d.frozenCents>current.balanceCents)return res.status(400).json({error:"Frozen amount cannot be greater than the current account balance."});
+  const u=await prisma.user.update({where:{id},data:{...(d.frozenCents!==undefined?{frozenCents:d.frozenCents}:{}),...(d.creditScore!==undefined?{creditScore:d.creditScore}:{})}});
+  await audit(res.locals.auth.sub,id,"CLIENT_BALANCE_CONTROL_UPDATED",{fields:Object.keys(d)});
+  res.json({balance:{...safeUser(u),availableCents:Math.max(0,u.balanceCents-(u.frozenCents??0))},message:"Balance controls updated."});
+}));
+
+app.post("/api/admin/balances/:id/adjust",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");
+  const d=z.object({type:z.enum(["CREDIT","DEBIT"]),amountCents:z.coerce.number().int().positive().max(100000000),note:z.string().trim().max(300).optional()}).parse(req.body||{});
+  const current=await prisma.user.findFirst({where:{id,role:Role.CLIENT,adminId:res.locals.auth.sub}});
+  if(!current)return res.status(404).json({error:"Client not found in your workspace."});
+  const delta=d.type==="CREDIT"?d.amountCents:-d.amountCents;
+  if(delta<0&&current.balanceCents<d.amountCents)return res.status(400).json({error:"Debit amount cannot be greater than the current account balance."});
+  const result=await prisma.$transaction(async tx=>{
+    await tx.user.update({where:{id},data:{balanceCents:{increment:delta}}});
+    const after=await tx.user.findUniqueOrThrow({where:{id}});
+    if((after.frozenCents??0)>after.balanceCents)await tx.user.update({where:{id},data:{frozenCents:after.balanceCents}});
+    const final=await tx.user.findUniqueOrThrow({where:{id}});
+    await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:id,amountCents:delta,type:d.type==="CREDIT"?"ADMIN_CREDIT":"ADMIN_DEBIT",note:d.note||(d.type==="CREDIT"?"Balance credit by administrator":"Balance debit by administrator")}});
+    return final;
+  });
+  await audit(res.locals.auth.sub,id,"CLIENT_BALANCE_ADJUSTED",{type:d.type,amountCents:d.amountCents});
+  res.json({balance:{...safeUser(result),availableCents:Math.max(0,result.balanceCents-(result.frozenCents??0))},message:"Client balance adjustment saved."});
+}));
 app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{
   const id=param(req,"id");
   const d=z.object({name:z.string().trim().min(2).max(80).optional(),identifier:z.string().trim().min(5).max(120).optional(),password:z.string().min(6).max(100).optional(),active:z.boolean().optional(),balanceCents:z.coerce.number().int().min(0).max(100000000).optional()}).parse(req.body);
