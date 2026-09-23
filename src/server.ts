@@ -58,7 +58,7 @@ function defaultTaskAmount(balanceCents:number,sequence:number){const tiers=bala
 function defaultCommission(amount:number){return Math.max(1,Math.round(amount*.05));}
 async function ensureTaskBatch(clientId:string,assignedById?:string){
   const count=await prisma.task.count({where:{clientId}});
-  if(count>0)return;
+  if(count>=30)return;
   const user=await prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}});
   await prisma.$transaction(async tx=>{for(let i=count+1;i<=30;i++){const amount=defaultTaskAmount(user.balanceCents,i);await tx.task.create({data:{id:await uniqueTaskId(),clientId,assignedById,sequence:i,title:i===2?"Lucky combination":"Daily task",amountCents:amount,commissionCents:defaultCommission(amount),isLucky:i===2}});}});
 }
