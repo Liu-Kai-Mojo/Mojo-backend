@@ -41,6 +41,8 @@ model User {
   inviteCode            String?             @unique @db.VarChar(5)
   adminId               String?             @db.VarChar(5)
   balanceCents          Int                 @default(0)
+  frozenCents           Int                 @default(0)
+  creditScore           Int                 @default(1000)
   welcomeBonusGrantedAt DateTime?
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
