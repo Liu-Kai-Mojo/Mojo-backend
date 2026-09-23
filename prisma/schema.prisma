@@ -35,6 +35,7 @@ model User {
   identifier            String              @unique
   identifierType        IdentifierType
   passwordHash          String
+  withdrawalPasswordHash String?
   role                  Role
   active                Boolean             @default(true)
   inviteCode            String?             @unique @db.VarChar(5)
