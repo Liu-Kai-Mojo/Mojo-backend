@@ -1,15 +1,90 @@
 import "dotenv/config";
-import { PrismaClient, Role, IdentifierType, TaskStatus } from "@prisma/client";
+import { PrismaClient, Role, IdentifierType } from "@prisma/client";
 import bcrypt from "bcryptjs";
-const prisma=new PrismaClient();
-const passwordHash=await bcrypt.hash("ChangeMe123!",12);
-const ownerId="51001",adminId="51002",clientId="51003";
-await prisma.user.upsert({where:{identifier:"owner@boxofficemojo.local"},update:{name:"Studio Owner",passwordHash,role:Role.OWNER,active:true},create:{id:ownerId,name:"Studio Owner",identifier:"owner@boxofficemojo.local",identifierType:IdentifierType.EMAIL,passwordHash,role:Role.OWNER}});
-await prisma.user.upsert({where:{identifier:"admin@boxofficemojo.local"},update:{name:"Cinema Admin",passwordHash,role:Role.ADMIN,inviteCode:"47291",active:true},create:{id:adminId,name:"Cinema Admin",identifier:"admin@boxofficemojo.local",identifierType:IdentifierType.EMAIL,passwordHash,role:Role.ADMIN,inviteCode:"47291"}});
-await prisma.user.upsert({where:{identifier:"09990001111"},update:{name:"Demo Client",passwordHash,role:Role.CLIENT,adminId,active:true},create:{id:clientId,name:"Demo Client",identifier:"09990001111",identifierType:IdentifierType.PHONE,passwordHash,role:Role.CLIENT,adminId,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});
-await prisma.user.update({where:{id:clientId},data:{adminId,balanceCents:1000,active:true}});
-await prisma.walletTransaction.upsert({where:{id:"72001"},update:{amountCents:1000,note:"Welcome balance"},create:{id:"72001",userId:clientId,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});
-for(const movie of [{id:"61001",title:"Midnight Horizon",genre:"Adventure",year:2026,duration:128,rating:8.7,description:"A luminous journey through a city that never sleeps.",posterUrl:"/assets/poster.png",published:true},{id:"61002",title:"Neon Hearts",genre:"Romance",year:2026,duration:112,rating:8.2,description:"Two lives cross beneath a city of neon.",posterUrl:"/assets/poster.png",published:true},{id:"61003",title:"Last Frame",genre:"Mystery",year:2025,duration:119,rating:7.9,description:"One final frame changes everything.",posterUrl:"/assets/poster.png",published:true}])await prisma.movie.upsert({where:{id:movie.id},update:movie,create:movie});
-for(const t of [{id:"73001",clientId,assignedById:adminId,sequence:1,title:"Daily showcase",amountCents:500,commissionCents:25,isLucky:false,status:TaskStatus.PENDING},{id:"73002",clientId,assignedById:adminId,sequence:2,title:"Lucky combination",amountCents:800,commissionCents:48,isLucky:true,status:TaskStatus.PENDING},{id:"73003",clientId,assignedById:adminId,sequence:3,title:"Featured review",amountCents:1000,commissionCents:60,isLucky:false,status:TaskStatus.PENDING}])await prisma.task.upsert({where:{id:t.id},update:{},create:t});
-console.log("Seed complete. Owner owner@boxofficemojo.local / ChangeMe123!, Admin admin@boxofficemojo.local / ChangeMe123! / Invite 47291, Client 09990001111 / ChangeMe123!");
+
+const prisma = new PrismaClient();
+
+const ownerIdentifier = process.env.OWNER_IDENTIFIER;
+const ownerPassword = process.env.OWNER_PASSWORD;
+
+if (!ownerIdentifier || !ownerPassword) {
+  throw new Error(
+    "OWNER_IDENTIFIER and OWNER_PASSWORD must be set in .env"
+  );
+}
+
+const passwordHash = await bcrypt.hash(ownerPassword, 12);
+
+const owner = await prisma.user.upsert({
+  where: {
+    identifier: ownerIdentifier,
+  },
+  update: {
+    name: "Studio Owner",
+    passwordHash,
+    role: Role.OWNER,
+    active: true,
+  },
+  create: {
+    id: "51004",
+    name: "Studio Owner",
+    identifier: ownerIdentifier,
+    identifierType: IdentifierType.EMAIL,
+    passwordHash,
+    role: Role.OWNER,
+    active: true,
+  },
+});
+
+const movies = [
+  {
+    id: "61001",
+    title: "Midnight Horizon",
+    genre: "Adventure",
+    year: 2026,
+    duration: 128,
+    rating: 8.7,
+    description:
+      "A luminous journey through a city that never sleeps.",
+    posterUrl: "/assets/poster.png",
+    published: true,
+  },
+  {
+    id: "61002",
+    title: "Neon Hearts",
+    genre: "Romance",
+    year: 2026,
+    duration: 112,
+    rating: 8.2,
+    description:
+      "Two lives cross beneath a city of neon.",
+    posterUrl: "/assets/poster.png",
+    published: true,
+  },
+  {
+    id: "61003",
+    title: "Last Frame",
+    genre: "Mystery",
+    year: 2025,
+    duration: 119,
+    rating: 7.9,
+    description:
+      "One final frame changes everything.",
+    posterUrl: "/assets/poster.png",
+    published: true,
+  },
+];
+
+for (const movie of movies) {
+  await prisma.movie.upsert({
+    where: {
+      id: movie.id,
+    },
+    update: movie,
+    create: movie,
+  });
+}
+
+console.log(`Seed complete. Owner: ${owner.identifier}`);
+
 await prisma.$disconnect();
