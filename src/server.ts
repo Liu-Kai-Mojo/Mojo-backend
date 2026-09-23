@@ -60,7 +60,7 @@ async function ensureTaskBatch(clientId:string,assignedById?:string){
   const count=await prisma.task.count({where:{clientId}});
   if(count>0)return;
   const user=await prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}});
-  await prisma.$transaction(async tx=>{for(let i=1;i<=5;i++){const amount=defaultTaskAmount(user.balanceCents,i);await tx.task.create({data:{id:await uniqueTaskId(),clientId,assignedById,sequence:i,title:i===2?"Lucky combination":"Daily task",amountCents:amount,commissionCents:defaultCommission(amount),isLucky:i===2}});}});
+  await prisma.$transaction(async tx=>{for(let i=count+1;i<=30;i++){const amount=defaultTaskAmount(user.balanceCents,i);await tx.task.create({data:{id:await uniqueTaskId(),clientId,assignedById,sequence:i,title:i===2?"Lucky combination":"Daily task",amountCents:amount,commissionCents:defaultCommission(amount),isLucky:i===2}});}});
 }
 function taskPublic(t:any,includeValues=false){return {id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,revealedAt:t.revealedAt,completedAt:t.completedAt,...(includeValues?{amountCents:t.amountCents,commissionCents:t.commissionCents}: {})};}
 function staffWhere(role:Role,id:string){return role===Role.OWNER?{role:Role.CLIENT}:{role:Role.CLIENT,adminId:id};}
