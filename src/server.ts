@@ -7,13 +7,13 @@ import { z } from "zod";
 import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
-import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode } from "./utils/codes.js";
+import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId } from "./utils/codes.js";
 
 const app=express();
 const port=Number(process.env.PORT||8787);
 const isProduction=process.env.NODE_ENV==="production";
 const normalize=(v:string)=>v.trim().replace(/\/+$/g,"");
-const defaults=["https://box-office-mojo.pages.dev","https://mojo-client.pages.dev","https://mojo-admin.pages.dev","https://mojo-owner.pages.dev"];
+const defaults=["https://box-office-mojo.pages.dev","https://mojo-client.pages.dev","https://mojo-admin.pages.dev","https://mojo-administrator.pages.dev","https://mojo-owner.pages.dev"];
 const origins=Array.from(new Set([...defaults,...(process.env.FRONTEND_ORIGINS||"").split(",").map(normalize).filter(Boolean)]));
 if(!isProduction) origins.push("http://localhost:5173","http://127.0.0.1:5173");
 app.disable("x-powered-by");
@@ -24,6 +24,33 @@ app.use((req,res,next)=>{if(req.path.startsWith("/api/"))res.setHeader("Cache-Co
 
 function detectIdentifier(v:string){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)?IdentifierType.EMAIL:IdentifierType.PHONE;}
 function safeUser(u:any){return {id:u.id,name:u.name,identifier:u.identifier,identifierType:u.identifierType,role:u.role,active:u.active,adminId:u.adminId??null,balanceCents:u.balanceCents??0,welcomeBonusGrantedAt:u.welcomeBonusGrantedAt??null,createdAt:u.createdAt};}
+async function audit(actorId:string|undefined, targetId:string|undefined, action:string, details?:unknown){
+  await prisma.auditLog.create({
+    data:{
+      id:await uniqueAuditLogId(),
+      actorId:actorId||null,
+      targetId:targetId||null,
+      action,
+      details:details===undefined?null:JSON.stringify(details)
+    }
+  });
+}
+async function ensureOwnerFromEnv(){
+  const identifierRaw=process.env.OWNER_IDENTIFIER?.trim();
+  const password=process.env.OWNER_PASSWORD?.trim();
+  if(!identifierRaw||!password)return;
+  const identifier=identifierRaw.includes("@")?identifierRaw.toLowerCase():identifierRaw;
+  const passwordHash=await hashPassword(password);
+  const existing=await prisma.user.findUnique({where:{identifier}});
+  if(existing){
+    if(existing.role!==Role.OWNER || !existing.active || !(await verifyPassword(password,existing.passwordHash))){
+      await prisma.user.update({where:{id:existing.id},data:{name:"Studio Owner",passwordHash,role:Role.OWNER,active:true}});
+    }
+    return;
+  }
+  await prisma.user.create({data:{id:await uniqueUserId(),name:"Studio Owner",identifier,identifierType:detectIdentifier(identifier),passwordHash,role:Role.OWNER,active:true}});
+}
+
 function param(req:express.Request,k:string){const v=req.params[k];return Array.isArray(v)?v[0]||"":v||"";}
 function asyncRoute(fn:(req:express.Request,res:express.Response,next:express.NextFunction)=>unknown|Promise<unknown>):express.RequestHandler{return(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);}
 function money(c:number){return Math.max(0,Math.round(c));}
@@ -53,7 +80,7 @@ app.post("/api/auth/register",asyncRoute(async(req,res)=>{
   const admin=await prisma.user.findUnique({where:{inviteCode:d.inviteCode},select:{id:true,role:true,active:true}});
   if(!admin||admin.role!==Role.ADMIN||!admin.active)return res.status(400).json({error:"That invite code is unavailable. Please ask your administrator for an active invite code."});
   const user=await prisma.$transaction(async tx=>{const u=await tx.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.CLIENT,adminId:admin.id,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:u.id,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});return u;});
-  const token=issueToken({id:user.id,role:user.role});return res.status(201).json({token,user:safeUser(user),message:"Your account is ready. Your welcome balance has been added."});
+  await audit(undefined,user.id,"CLIENT_REGISTERED",{adminId:admin.id}); const token=issueToken({id:user.id,role:user.role});return res.status(201).json({token,user:safeUser(user),message:"Your account is ready. Your welcome balance has been added."});
 }));
 app.post("/api/auth/login",asyncRoute(async(req,res)=>{const d=loginSchema.parse(req.body);const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;const user=await prisma.user.findUnique({where:{identifier}});if(!user||!user.active||!(await verifyPassword(d.password,user.passwordHash)))return res.status(401).json({error:"The sign-in details do not match our records."});const token=issueToken({id:user.id,role:user.role});return res.json({token,user:safeUser(user),message:"Welcome back."});}));
 app.get("/api/me",auth(),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)});}));
@@ -70,7 +97,19 @@ app.get("/api/client/account",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{c
 const staff=[Role.OWNER,Role.ADMIN];
 app.get("/api/admin/dashboard",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const where=staffWhere(role,res.locals.auth.sub);const [clients,messages,pendingTasks,completedTasks]=await Promise.all([prisma.user.count({where:{...where,active:true}}),prisma.message.count({where:role===Role.OWNER?{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]}}:{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]},OR:[{recipientId:res.locals.auth.sub},{sender:{adminId:res.locals.auth.sub}}]}}),prisma.task.count({where:{status:TaskStatus.PENDING,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}}),prisma.task.count({where:{status:TaskStatus.COMPLETED,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}})]);res.json({clients,messages,pendingTasks,completedTasks});}));
 app.get("/api/admin/clients",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const clients=await prisma.user.findMany({where:staffWhere(role,res.locals.auth.sub),orderBy:{createdAt:"desc"}});res.json({clients:clients.map(safeUser)});}));
-app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({active:z.boolean().optional(),balanceCents:z.coerce.number().int().min(0).max(100000000).optional()}).parse(req.body);const c=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!c)return res.status(404).json({error:"Client not found."});let u=c;if(typeof d.balanceCents==="number"&&d.balanceCents!==c.balanceCents){const delta=d.balanceCents-c.balanceCents;u=await prisma.$transaction(async tx=>{const updated=await tx.user.update({where:{id},data:{balanceCents:d.balanceCents}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:id,amountCents:delta,type:"ADMIN_ADJUSTMENT",note:"Balance updated by staff"}});return updated;});}if(typeof d.active==="boolean")u=await prisma.user.update({where:{id},data:{active:d.active}});res.json({user:safeUser(u)});}));
+app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({active:z.boolean().optional(),balanceCents:z.coerce.number().int().min(0).max(100000000).optional()}).parse(req.body);const c=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!c)return res.status(404).json({error:"Client not found."});let u=c;if(typeof d.balanceCents==="number"&&d.balanceCents!==c.balanceCents){const delta=d.balanceCents-c.balanceCents;u=await prisma.$transaction(async tx=>{const updated=await tx.user.update({where:{id},data:{balanceCents:d.balanceCents}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:id,amountCents:delta,type:"ADMIN_ADJUSTMENT",note:"Balance updated by staff"}});return updated;});}if(typeof d.active==="boolean"){u=await prisma.user.update({where:{id},data:{active:d.active}});await audit(res.locals.auth.sub,id,d.active?"CLIENT_ENABLED":"CLIENT_PAUSED");}if(typeof d.balanceCents==="number"&&d.balanceCents!==c.balanceCents)await audit(res.locals.auth.sub,id,"CLIENT_BALANCE_CHANGED",{balanceCents:d.balanceCents});res.json({user:safeUser(u)});}));
+app.post("/api/admin/clients",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
+  const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100)}).parse(req.body);
+  const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;
+  if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});
+  const u=await prisma.$transaction(async tx=>{
+    const c=await tx.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.CLIENT,adminId:res.locals.auth.sub,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});
+    await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:c.id,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});
+    return c;
+  });
+  await audit(res.locals.auth.sub,u.id,"CLIENT_CREATED",{adminId:res.locals.auth.sub});
+  res.status(201).json({client:safeUser(u),message:"Client created successfully."});
+}));
 app.get("/api/admin/clients/:id/tasks",auth(staff),asyncRoute(async(req,res)=>{const id=param(req,"id");const c=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!c)return res.status(404).json({error:"Client not found."});await ensureTaskBatch(id,res.locals.auth.sub);const tasks=await prisma.task.findMany({where:{clientId:id},orderBy:{sequence:"asc"}});res.json({tasks:tasks.map(t=>taskPublic(t,true)),client:safeUser(c)});}));
 app.post("/api/admin/clients/:id/tasks",auth(staff),asyncRoute(async(req,res)=>{const id=param(req,"id");const c=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!c)return res.status(404).json({error:"Client not found."});const d=taskSchema.parse(req.body);const amount=d.amountCents??defaultTaskAmount(c.balanceCents,d.sequence);const commission=d.commissionCents??(d.commissionRateBps!==undefined?Math.round(amount*d.commissionRateBps/10000):defaultCommission(amount));const existing=await prisma.task.findUnique({where:{clientId_sequence:{clientId:id,sequence:d.sequence}}});const task=existing?await prisma.task.update({where:{id:existing.id},data:{title:d.title??existing.title,amountCents:amount,commissionCents:commission,isLucky:d.isLucky??existing.isLucky,assignedById:res.locals.auth.sub,status:TaskStatus.PENDING,revealedAt:null,completedAt:null}}):await prisma.task.create({data:{id:await uniqueTaskId(),clientId:id,assignedById:res.locals.auth.sub,sequence:d.sequence,title:d.title??(d.isLucky?"Lucky combination":"Daily task"),amountCents:amount,commissionCents:commission,isLucky:d.isLucky??false}});res.json({task:taskPublic(task,true),message:"Task saved for this client."});}));
 app.post("/api/admin/clients/:id/tasks/reset",auth(staff),asyncRoute(async(req,res)=>{const id=param(req,"id");const c=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!c)return res.status(404).json({error:"Client not found."});const count=z.object({count:z.coerce.number().int().min(1).max(20).optional()}).parse(req.body||{}).count??5;await prisma.$transaction(async tx=>{await tx.task.deleteMany({where:{clientId:id}});for(let i=1;i<=count;i++){const amount=defaultTaskAmount(c.balanceCents,i);await tx.task.create({data:{id:await uniqueTaskId(),clientId:id,assignedById:res.locals.auth.sub,sequence:i,title:i===2?"Lucky combination":"Daily task",amountCents:amount,commissionCents:defaultCommission(amount),isLucky:i===2}});}});const tasks=await prisma.task.findMany({where:{clientId:id},orderBy:{sequence:"asc"}});res.json({tasks:tasks.map(t=>taskPublic(t,true)),message:"Tasks reset and rebuilt."});}));
@@ -79,11 +118,23 @@ app.post("/api/admin/clients/:id/messages",auth([Role.ADMIN]),asyncRoute(async(r
 app.patch("/api/admin/messages/:id",auth(staff),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({status:z.enum(["OPEN","REPLIED","CLOSED"]),reply:z.string().max(3000).optional()}).parse(req.body);const current=await prisma.message.findUniqueOrThrow({where:{id},include:{sender:{select:{id:true,role:true,adminId:true}}}});if(res.locals.auth.role===Role.ADMIN&&current.sender.role===Role.CLIENT&&current.sender.adminId!==res.locals.auth.sub)return res.status(403).json({error:"This conversation is outside your workspace."});let reply=null;if(d.reply?.trim())reply=await prisma.message.create({data:{id:await uniqueMessageId(),senderId:res.locals.auth.sub,recipientId:current.senderId,subject:`Re: ${current.subject}`,body:d.reply.trim(),status:MessageStatus.REPLIED}});const message=await prisma.message.update({where:{id},data:{status:d.status}});res.json({message,reply});}));
 
 app.get("/api/owner/admins",auth([Role.OWNER]),asyncRoute(async(_req,res)=>{const admins=await prisma.user.findMany({where:{role:Role.ADMIN},orderBy:{createdAt:"desc"}});res.json({admins:admins.map(a=>({...safeUser(a),inviteCode:a.inviteCode}))});}));
-app.post("/api/owner/admins",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100)}).parse(req.body);const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});const inviteCode=await uniqueInviteCode();const admin=await prisma.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.ADMIN,inviteCode}});res.status(201).json({admin:{...safeUser(admin),inviteCode},message:"Admin created successfully."});}));
-app.patch("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({active:z.boolean()}).parse(req.body);const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});if(!admin)return res.status(404).json({error:"Admin not found."});const u=await prisma.user.update({where:{id},data:{active:d.active}});res.json({admin:safeUser(u)});}));
-app.delete("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});if(!admin)return res.status(404).json({error:"Admin not found."});await prisma.user.delete({where:{id}});res.json({message:"Admin removed."});}));
+app.post("/api/owner/admins",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100)}).parse(req.body);const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});const inviteCode=await uniqueInviteCode();const admin=await prisma.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.ADMIN,inviteCode}});await audit(res.locals.auth.sub,admin.id,"ADMIN_CREATED",{inviteCode});res.status(201).json({admin:{...safeUser(admin),inviteCode},message:"Admin created successfully."});}));
+app.patch("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({active:z.boolean()}).parse(req.body);const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});if(!admin)return res.status(404).json({error:"Admin not found."});const u=await prisma.user.update({where:{id},data:{active:d.active}});await audit(res.locals.auth.sub,id,d.active?"ADMIN_ENABLED":"ADMIN_PAUSED");res.json({admin:safeUser(u)});}));
+app.delete("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});if(!admin)return res.status(404).json({error:"Admin not found."});await audit(res.locals.auth.sub,id,"ADMIN_DELETED");await prisma.user.delete({where:{id}});res.json({message:"Admin removed."});}));
 app.post("/api/owner/clients",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100),adminId:z.string().regex(/^\d{5}$/)}).parse(req.body);const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;const admin=await prisma.user.findFirst({where:{id:d.adminId,role:Role.ADMIN,active:true}});if(!admin)return res.status(400).json({error:"Choose an active administrator."});if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});const u=await prisma.$transaction(async tx=>{const c=await tx.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.CLIENT,adminId:admin.id,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:c.id,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});return c;});res.status(201).json({client:safeUser(u),message:"Client created successfully."});}));
-app.delete("/api/owner/clients/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const c=await prisma.user.findFirst({where:{id,role:Role.CLIENT}});if(!c)return res.status(404).json({error:"Client not found."});await prisma.user.delete({where:{id}});res.json({message:"Client removed."});}));
+app.delete("/api/owner/clients/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const c=await prisma.user.findFirst({where:{id,role:Role.CLIENT}});if(!c)return res.status(404).json({error:"Client not found."});await audit(res.locals.auth.sub,id,"CLIENT_DELETED");await prisma.user.delete({where:{id}});res.json({message:"Client removed."});}));
+app.get("/api/owner/users/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");
+  const user=await prisma.user.findUnique({where:{id},include:{admin:{select:{id:true,name:true,identifier:true,active:true}},managedClients:{select:{id:true,name:true,identifier:true,active:true}},walletTransactions:{orderBy:{createdAt:"desc"},take:30},tasks:{orderBy:{sequence:"asc"}},messagesSent:{orderBy:{createdAt:"desc"},take:20},messagesOwned:{orderBy:{createdAt:"desc"},take:20}}});
+  if(!user||user.role===Role.OWNER)return res.status(404).json({error:"Account not found."});
+  const auditLogs=await prisma.auditLog.findMany({where:{OR:[{targetId:id},{actorId:id}]},orderBy:{createdAt:"desc"},take:50});
+  res.json({user:safeUser(user),admin:user.admin?{id:user.admin.id,name:user.admin.name,identifier:user.admin.identifier,active:user.admin.active}:null,clients:user.managedClients.map(safeUser),transactions:user.walletTransactions,tasks:user.tasks.map(t=>taskPublic(t,true)),messages:[...user.messagesSent,...user.messagesOwned],auditLogs});
+}));
+app.get("/api/owner/audit",auth([Role.OWNER]),asyncRoute(async(req,res)=>{
+  const take=Math.min(Number(req.query.take||100),250);
+  const logs=await prisma.auditLog.findMany({take,orderBy:{createdAt:"desc"},include:{actor:{select:{id:true,name:true,role:true}},target:{select:{id:true,name:true,role:true}}}});
+  res.json({logs});
+}));
 app.get("/api/owner/settings",auth([Role.OWNER]),asyncRoute(async(_req,res)=>res.json({settings:await prisma.setting.findMany({orderBy:{key:"asc"}})})));
 app.patch("/api/owner/settings/:key",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const key=param(req,"key");const d=z.object({value:z.string().max(1000)}).parse(req.body);const setting=await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:d.value},update:{value:d.value}});res.json({setting});}));
 
@@ -93,6 +144,6 @@ app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.Nex
 const server=app.listen(port,"0.0.0.0",()=>{console.log(`Box Office Mojo API listening on ${port}`);void runMigrationsUntilReady();});
 server.on("error",e=>{console.error(e);process.exitCode=1;});
 function runMigrations(){return new Promise<void>((resolve,reject)=>{const args=["prisma","migrate","deploy","--schema=prisma/schema.prisma"];migrationProcess=execFile(process.platform==="win32"?(process.env.ComSpec||"cmd.exe"):"npx",process.platform==="win32"?["/d","/s","/c","npx "+args.join(" ")]:args,{cwd:process.cwd(),env:process.env,windowsHide:true},(error,stdout,stderr)=>{migrationProcess=null;if(stdout.trim())console.log(stdout.trim());if(stderr.trim())console.error(stderr.trim());error?reject(error):resolve();});});}
-async function runMigrationsUntilReady(){let delay=2000;while(!applicationReady){try{await runMigrations();await prisma.$queryRaw`SELECT 1`;applicationReady=true;console.log("Database ready.");}catch(e){console.error(`Database/migration startup failed; retrying in ${Math.ceil(delay/1000)}s`,e);await new Promise(r=>setTimeout(r,delay));delay=Math.min(delay*2,30000);}}}
+async function runMigrationsUntilReady(){let delay=2000;while(!applicationReady){try{await runMigrations();await prisma.$queryRaw`SELECT 1`;await ensureOwnerFromEnv();applicationReady=true;console.log("Database ready.");}catch(e){console.error(`Database/migration startup failed; retrying in ${Math.ceil(delay/1000)}s`,e);await new Promise(r=>setTimeout(r,delay));delay=Math.min(delay*2,30000);}}}
 async function shutdown(signal:string){console.log(`${signal} received.`);if(migrationProcess) migrationProcess.kill();await prisma.$disconnect();server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),10000);}
 process.on("SIGINT",()=>void shutdown("SIGINT"));process.on("SIGTERM",()=>void shutdown("SIGTERM"));
