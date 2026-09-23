@@ -64,7 +64,7 @@ async function ensureTaskBatch(clientId:string,assignedById?:string){
 }
 async function fetchMovieFeed(){
   const titles=["Resident Evil","Practical Magic 2","Spider-Man: Brand New Day","The Odyssey","Coyote vs. Acme","Runner","Daniel and the Fiery Furnace","The Transformers: The Movie","The Weight","Buddy","Insidious: Out of the Further","PAW Patrol: The Dino Movie","Toy Story 5","Moana","Obsession","Avengers: Secret Wars","Super Mario Galaxy Movie","The Hunger Games: Sunrise on the Reaping"];
-  const key=process.env.TMDB_API_KEY||"";
+  const key=process.env.TMDB_API_KEY||process.env.TMDB_API||"";
   const token=process.env.TMDB_API_READ_ACCESS_TOKEN||"";
   const out:any[]=[];
   for(const title of titles){
@@ -78,7 +78,7 @@ async function fetchMovieFeed(){
         if(hit?.poster_path)posterUrl="https://image.tmdb.org/t/p/w500"+hit.poster_path;
       }catch{}
     }
-    out.push({title,posterUrl,priceCents:null});
+    const popularity=Number((typeof hit!=="undefined"&&hit?.popularity)||10); const priceCents=Math.max(500,Math.round(popularity*100)); out.push({title,posterUrl,priceCents});
   }
   return out;
 }
