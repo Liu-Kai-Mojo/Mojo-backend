@@ -23,7 +23,7 @@ app.use(express.json({limit:"2mb"}));
 app.use((req,res,next)=>{if(req.path.startsWith("/api/"))res.setHeader("Cache-Control","no-store");next();});
 
 function detectIdentifier(v:string){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)?IdentifierType.EMAIL:IdentifierType.PHONE;}
-function safeUser(u:any){return {id:u.id,name:u.name,identifier:u.identifier,identifierType:u.identifierType,role:u.role,active:u.active,adminId:u.adminId??null,balanceCents:u.balanceCents??0,welcomeBonusGrantedAt:u.welcomeBonusGrantedAt??null,createdAt:u.createdAt};}
+function safeUser(u:any){return {id:u.id,name:u.name,identifier:u.identifier,identifierType:u.identifierType,role:u.role,active:u.active,adminId:u.adminId??null,balanceCents:u.balanceCents??0,welcomeBonusGrantedAt:u.welcomeBonusGrantedAt??null,createdAt:u.createdAt,...(u.role===Role.ADMIN?{inviteCode:u.inviteCode??null}:{})};}
 async function audit(actorId:string|undefined, targetId:string|undefined, action:string, details?:unknown){
   await prisma.auditLog.create({
     data:{
@@ -79,7 +79,7 @@ app.post("/api/auth/register",asyncRoute(async(req,res)=>{
   if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});
   const admin=await prisma.user.findUnique({where:{inviteCode:d.inviteCode},select:{id:true,role:true,active:true}});
   if(!admin||admin.role!==Role.ADMIN||!admin.active)return res.status(400).json({error:"That invite code is unavailable. Please ask your administrator for an active invite code."});
-  const user=await prisma.$transaction(async tx=>{const u=await tx.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.CLIENT,adminId:admin.id,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:u.id,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});return u;});
+  const user=await prisma.$transaction(async tx=>{const u=await tx.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),withdrawalPasswordHash:await hashPassword(d.withdrawalPassword),role:Role.CLIENT,adminId:admin.id,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:u.id,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});return u;});
   await audit(undefined,user.id,"CLIENT_REGISTERED",{adminId:admin.id}); const token=issueToken({id:user.id,role:user.role});return res.status(201).json({token,user:safeUser(user),message:"Your account is ready. Your welcome balance has been added."});
 }));
 app.post("/api/auth/login",asyncRoute(async(req,res)=>{const d=loginSchema.parse(req.body);const identifier=d.identifier.trim().includes("@")?d.identifier.trim().toLowerCase():d.identifier.trim();const user=await prisma.user.findUnique({where:{identifier}});if(!user)return res.status(401).json({error:"We could not find an account with that email or phone number."});if(!user.active)return res.status(403).json({error:"This account is currently paused. Please contact the workspace owner."});if(!(await verifyPassword(d.password,user.passwordHash)))return res.status(401).json({error:"The password does not match this account."});const token=issueToken({id:user.id,role:user.role});return res.json({token,user:safeUser(user),message:"Welcome back."});}));
@@ -95,9 +95,26 @@ app.post("/api/client/messages",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
 app.get("/api/client/account",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)});}));
 
 const staff=[Role.OWNER,Role.ADMIN];
-app.get("/api/admin/dashboard",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const where=staffWhere(role,res.locals.auth.sub);const [clients,messages,pendingTasks,completedTasks]=await Promise.all([prisma.user.count({where:{...where,active:true}}),prisma.message.count({where:role===Role.OWNER?{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]}}:{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]},OR:[{recipientId:res.locals.auth.sub},{sender:{adminId:res.locals.auth.sub}}]}}),prisma.task.count({where:{status:TaskStatus.PENDING,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}}),prisma.task.count({where:{status:TaskStatus.COMPLETED,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}})]);res.json({clients,messages,pendingTasks,completedTasks});}));
+app.get("/api/admin/dashboard",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const where=staffWhere(role,res.locals.auth.sub);const [clients,admins,messages,pendingTasks,completedTasks]=await Promise.all([prisma.user.count({where:{...where,active:true}}),prisma.user.count({where:{role:Role.ADMIN,active:true}}),prisma.message.count({where:role===Role.OWNER?{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]}}:{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]},OR:[{recipientId:res.locals.auth.sub},{sender:{adminId:res.locals.auth.sub}}]}}),prisma.task.count({where:{status:TaskStatus.PENDING,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}}),prisma.task.count({where:{status:TaskStatus.COMPLETED,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}})]);res.json({clients,admins,messages,pendingTasks,completedTasks});}));
 app.get("/api/admin/clients",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const clients=await prisma.user.findMany({where:staffWhere(role,res.locals.auth.sub),orderBy:{createdAt:"desc"}});res.json({clients:clients.map(safeUser)});}));
-app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({active:z.boolean().optional(),balanceCents:z.coerce.number().int().min(0).max(100000000).optional()}).parse(req.body);const c=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!c)return res.status(404).json({error:"Client not found."});let u=c;if(typeof d.balanceCents==="number"&&d.balanceCents!==c.balanceCents){const delta=d.balanceCents-c.balanceCents;u=await prisma.$transaction(async tx=>{const updated=await tx.user.update({where:{id},data:{balanceCents:d.balanceCents}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:id,amountCents:delta,type:"ADMIN_ADJUSTMENT",note:"Balance updated by staff"}});return updated;});}if(typeof d.active==="boolean"){u=await prisma.user.update({where:{id},data:{active:d.active}});await audit(res.locals.auth.sub,id,d.active?"CLIENT_ENABLED":"CLIENT_PAUSED");}if(typeof d.balanceCents==="number"&&d.balanceCents!==c.balanceCents)await audit(res.locals.auth.sub,id,"CLIENT_BALANCE_CHANGED",{balanceCents:d.balanceCents});res.json({user:safeUser(u)});}));
+app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");
+  const d=z.object({name:z.string().trim().min(2).max(80).optional(),identifier:z.string().trim().min(5).max(120).optional(),password:z.string().min(6).max(100).optional(),active:z.boolean().optional(),balanceCents:z.coerce.number().int().min(0).max(100000000).optional()}).parse(req.body);
+  const current=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);
+  if(!current)return res.status(404).json({error:"Client not found."});
+  let identifier=current.identifier;
+  if(d.identifier!==undefined){identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;if(identifier!==current.identifier){const duplicate=await prisma.user.findUnique({where:{identifier}});if(duplicate)return res.status(409).json({error:"That email or phone number is already in use."});}}
+  const data:any={};
+  if(d.name!==undefined)data.name=d.name;
+  if(d.identifier!==undefined){data.identifier=identifier;data.identifierType=detectIdentifier(identifier);}
+  if(d.password!==undefined)data.passwordHash=await hashPassword(d.password);
+  if(d.active!==undefined)data.active=d.active;
+  if(d.balanceCents!==undefined)data.balanceCents=d.balanceCents;
+  let u=current;
+  if(Object.keys(data).length){u=await prisma.user.update({where:{id},data});await audit(res.locals.auth.sub,id,"CLIENT_UPDATED",{fields:Object.keys(data)});}
+  if(d.balanceCents!==undefined&&d.balanceCents!==current.balanceCents){const delta=d.balanceCents-current.balanceCents;await prisma.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:id,amountCents:delta,type:"ADMIN_ADJUSTMENT",note:"Balance updated by staff"}});}
+  res.json({user:safeUser(u),message:"Client changes saved."});
+}));
 app.post("/api/admin/clients",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
   const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100)}).parse(req.body);
   const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;
@@ -119,7 +136,22 @@ app.patch("/api/admin/messages/:id",auth(staff),asyncRoute(async(req,res)=>{cons
 
 app.get("/api/owner/admins",auth([Role.OWNER]),asyncRoute(async(_req,res)=>{const admins=await prisma.user.findMany({where:{role:Role.ADMIN},orderBy:{createdAt:"desc"}});res.json({admins:admins.map(a=>({...safeUser(a),inviteCode:a.inviteCode}))});}));
 app.post("/api/owner/admins",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100)}).parse(req.body);const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});const inviteCode=await uniqueInviteCode();const admin=await prisma.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.ADMIN,inviteCode}});await audit(res.locals.auth.sub,admin.id,"ADMIN_CREATED",{inviteCode});res.status(201).json({admin:{...safeUser(admin),inviteCode},message:"Admin created successfully."});}));
-app.patch("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({active:z.boolean()}).parse(req.body);const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});if(!admin)return res.status(404).json({error:"Admin not found."});const u=await prisma.user.update({where:{id},data:{active:d.active}});await audit(res.locals.auth.sub,id,d.active?"ADMIN_ENABLED":"ADMIN_PAUSED");res.json({admin:safeUser(u)});}));
+app.patch("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");
+  const d=z.object({name:z.string().trim().min(2).max(80).optional(),identifier:z.string().trim().min(5).max(120).optional(),password:z.string().min(6).max(100).optional(),active:z.boolean().optional()}).parse(req.body);
+  const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});
+  if(!admin)return res.status(404).json({error:"Admin not found."});
+  let identifier=admin.identifier;
+  if(d.identifier!==undefined){identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;if(identifier!==admin.identifier){const duplicate=await prisma.user.findUnique({where:{identifier}});if(duplicate)return res.status(409).json({error:"That email or phone number is already in use."});}}
+  const data:any={};
+  if(d.name!==undefined)data.name=d.name;
+  if(d.identifier!==undefined){data.identifier=identifier;data.identifierType=detectIdentifier(identifier);}
+  if(d.password!==undefined)data.passwordHash=await hashPassword(d.password);
+  if(d.active!==undefined)data.active=d.active;
+  const u=await prisma.user.update({where:{id},data});
+  await audit(res.locals.auth.sub,id,"ADMIN_UPDATED",{fields:Object.keys(data)});
+  res.json({admin:{...safeUser(u),inviteCode:u.inviteCode},message:"Admin changes saved."});
+}));
 app.delete("/api/owner/admins/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const admin=await prisma.user.findFirst({where:{id,role:Role.ADMIN}});if(!admin)return res.status(404).json({error:"Admin not found."});await audit(res.locals.auth.sub,id,"ADMIN_DELETED");await prisma.user.delete({where:{id}});res.json({message:"Admin removed."});}));
 app.post("/api/owner/clients",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100),adminId:z.string().regex(/^\d{5}$/)}).parse(req.body);const identifier=d.identifier.includes("@")?d.identifier.toLowerCase():d.identifier;const admin=await prisma.user.findFirst({where:{id:d.adminId,role:Role.ADMIN,active:true}});if(!admin)return res.status(400).json({error:"Choose an active administrator."});if(await prisma.user.findUnique({where:{identifier}}))return res.status(409).json({error:"That email or phone number is already in use."});const u=await prisma.$transaction(async tx=>{const c=await tx.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),role:Role.CLIENT,adminId:admin.id,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:c.id,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});return c;});res.status(201).json({client:safeUser(u),message:"Client created successfully."});}));
 app.delete("/api/owner/clients/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const id=param(req,"id");const c=await prisma.user.findFirst({where:{id,role:Role.CLIENT}});if(!c)return res.status(404).json({error:"Client not found."});await audit(res.locals.auth.sub,id,"CLIENT_DELETED");await prisma.user.delete({where:{id}});res.json({message:"Client removed."});}));
@@ -128,7 +160,7 @@ app.get("/api/owner/users/:id",auth([Role.OWNER]),asyncRoute(async(req,res)=>{
   const user=await prisma.user.findUnique({where:{id},include:{admin:{select:{id:true,name:true,identifier:true,active:true}},managedClients:{select:{id:true,name:true,identifier:true,active:true}},walletTransactions:{orderBy:{createdAt:"desc"},take:30},tasks:{orderBy:{sequence:"asc"}},messagesSent:{orderBy:{createdAt:"desc"},take:20},messagesOwned:{orderBy:{createdAt:"desc"},take:20}}});
   if(!user||user.role===Role.OWNER)return res.status(404).json({error:"Account not found."});
   const auditLogs=await prisma.auditLog.findMany({where:{OR:[{targetId:id},{actorId:id}]},orderBy:{createdAt:"desc"},take:50});
-  res.json({user:safeUser(user),admin:user.admin?{id:user.admin.id,name:user.admin.name,identifier:user.admin.identifier,active:user.admin.active}:null,clients:user.managedClients.map(safeUser),transactions:user.walletTransactions,tasks:user.tasks.map(t=>taskPublic(t,true)),messages:[...user.messagesSent,...user.messagesOwned],auditLogs});
+  res.json({user:{...safeUser(user),inviteCode:user.role===Role.ADMIN?user.inviteCode:null},admin:user.admin?{id:user.admin.id,name:user.admin.name,identifier:user.admin.identifier,active:user.admin.active}:null,clients:user.managedClients.map(safeUser),transactions:user.walletTransactions,tasks:user.tasks.map(t=>taskPublic(t,true)),messages:[...user.messagesSent,...user.messagesOwned],auditLogs});
 }));
 app.get("/api/owner/audit",auth([Role.OWNER]),asyncRoute(async(req,res)=>{
   const take=Math.min(Number(req.query.take||100),250);
