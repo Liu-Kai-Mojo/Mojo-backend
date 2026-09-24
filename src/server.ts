@@ -56,7 +56,7 @@ function asyncRoute(fn:(req:express.Request,res:express.Response,next:express.Ne
 function money(c:number){return Math.max(0,Math.round(c));}
 function defaultTaskAmount(balanceCents:number,sequence:number){const tiers=balanceCents<500?500:balanceCents<2000?1000:balanceCents<10000?2500:5000;return tiers+Math.min(sequence-1,4)*Math.round(tiers*.2);}
 function defaultCommission(amount:number){return Math.max(1,Math.round(amount*.05));}
-async function randomTaskAmount(balanceCents:number,sequence:number){const minimum=5000;if(balanceCents<minimum)return minimum;const max=Math.max(minimum,Math.min(balanceCents,Math.max(minimum,Math.floor(balanceCents*(0.18+Math.random()*0.18)))));const step=Math.max(100,Math.round((max-minimum)/5));const choices=[minimum,minimum+step,minimum+step*2,minimum+step*3,max].filter(v=>v<=balanceCents);return choices[Math.floor(Math.random()*choices.length)]||minimum}
+function randomTaskAmount(balanceCents:number,sequence:number){const minimum=5000;if(balanceCents<minimum)return minimum;const max=Math.max(minimum,Math.min(balanceCents,Math.max(minimum,Math.floor(balanceCents*(0.18+Math.random()*0.18)))));const step=Math.max(100,Math.round((max-minimum)/5));const choices=[minimum,minimum+step,minimum+step*2,minimum+step*3,max].filter(v=>v<=balanceCents);return choices[Math.floor(Math.random()*choices.length)]||minimum}
 async function ensureTaskBatch(clientId:string,assignedById?:string){
   const count=await prisma.task.count({where:{clientId}});
   if(count>=30)return;
