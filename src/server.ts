@@ -65,7 +65,7 @@ async function ensureTaskBatch(clientId:string,assignedById?:string){
 async function fetchMovieFeed(){
   const titles=["Resident Evil","Practical Magic 2","Spider-Man: Brand New Day","The Odyssey","Coyote vs. Acme","Runner","Daniel and the Fiery Furnace","The Transformers: The Movie","The Weight","Buddy","Insidious: Out of the Further","PAW Patrol: The Dino Movie","Toy Story 5","Moana","Obsession","Avengers: Secret Wars","Super Mario Galaxy Movie","The Hunger Games: Sunrise on the Reaping"];
   const key=process.env.TMDB_API_KEY||process.env.TMDB_API||"";
-  const token=process.env.TMDB_API_READ_ACCESS_TOKEN||"";
+  const token=process.env.TMDB_API_READ_TOKEN||"";
   const out:any[]=[];
   for(const title of titles){
     let hit:any=null;
@@ -91,7 +91,7 @@ async function fetchMovieFeed(){
     }
     const popularity=Number(hit?.popularity||10);
     const priceCents=Math.max(500,Math.round(popularity*100));
-    out.push({title,posterUrl,priceCents,trailerUrl});
+    out.push({title,tmdbId:hit?.id??null,posterUrl,priceCents,trailerUrl});
   }
   return out;
 }
@@ -125,6 +125,7 @@ app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   res.json({admin:admin?{id:admin.id,name:admin.name}:null,telegramUsername:setting?.value||null});
 }));
 app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const movies=await fetchMovieFeed();res.json({movies});}));
+app.get("/api/client/movies/:id/videos",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{const id=Number(param(req,"id"));if(!Number.isInteger(id)||id<=0)return res.status(400).json({error:"Invalid movie id."});const token=process.env.TMDB_API_READ_TOKEN||"";const key=process.env.TMDB_API_KEY||process.env.TMDB_API||"";if(!token&&!key)return res.status(503).json({error:"Movie video service is not configured.",code:"TMDB_NOT_CONFIGURED"});const cache=(globalThis as any).__tmdbVideoCache as Map<number,{expires:number;value:any}>|undefined;const videoCache=cache||new Map<number,{expires:number;value:any}>();(globalThis as any).__tmdbVideoCache=videoCache;const hit=videoCache.get(id);if(hit&&hit.expires>Date.now())return res.json(hit.value);try{const base=`https://api.themoviedb.org/3/movie/${id}?append_to_response=videos&language=en-US`;const url=token?base:base+`&api_key=${encodeURIComponent(key)}`;const rr=await fetch(url,{headers:token?{Authorization:`Bearer ${token}`}:{accept:"application/json"},signal:AbortSignal.timeout(8000)});if(!rr.ok){if(rr.status===404)return res.status(404).json({error:"Movie not found."});if(rr.status===429)return res.status(429).json({error:"Movie video service is temporarily busy.",code:"TMDB_RATE_LIMIT"});return res.status(502).json({error:"Movie video service is unavailable.",code:"TMDB_UPSTREAM_ERROR"});}const movie:any=await rr.json();const videos=Array.isArray(movie.videos?.results)?movie.videos.results:[];const selected=videos.find((v:any)=>v.site==="YouTube"&&v.type==="Trailer"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&v.type==="Teaser"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser"));const value={movieId:id,title:movie.title||"",video:selected?{key:selected.key,name:selected.name,type:selected.type,site:selected.site,embedUrl:`https://www.youtube.com/embed/${selected.key}?autoplay=1&rel=0&modestbranding=1`}:null};videoCache.set(id,{expires:Date.now()+10*60*1000,value});res.json(value);}catch{res.status(502).json({error:"Movie video service is unavailable.",code:"TMDB_NETWORK_ERROR"});}}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.task.findMany({where:{clientId:userId},orderBy:{sequence:"asc"}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),transactions:txs,messages});}));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
