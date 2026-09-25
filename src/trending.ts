@@ -36,6 +36,8 @@ const cacheState = new Map<string,CacheState>();
 const refreshState = new Map<string,Promise<TrendingVideo[]>>();
 const recentState = new Map<string,string[]>();
 
+function providerError(code:string,message:string){const error=new Error(message);(error as any).code=code;return error;}
+function classifyUpstream(status:number,provider:"TMDB"|"YOUTUBE"){if(status===401||status===403)return provider==="TMDB"?"TMDB_AUTH_ERROR":"YOUTUBE_AUTH_ERROR";if(status===404)return provider==="TMDB"?"TMDB_NOT_FOUND":"YOUTUBE_VIDEO_UNAVAILABLE";if(status===429)return provider==="TMDB"?"TMDB_RATE_LIMIT":"YOUTUBE_QUOTA_EXCEEDED";if(status>=500)return provider==="TMDB"?"TMDB_SERVICE_UNAVAILABLE":"YOUTUBE_SERVICE_UNAVAILABLE";return provider==="TMDB"?"TMDB_INVALID_REQUEST":"YOUTUBE_INVALID_REQUEST";}
 function numberSetting(value:string|undefined,fallback:number){
   const n=Number(value);
   return Number.isFinite(n)&&n>=0?n:fallback;
@@ -104,8 +106,8 @@ async function youtubeFetch(cfg:TrendingConfig){
     url.searchParams.set("part","snippet");url.searchParams.set("type","video");url.searchParams.set("videoEmbeddable","true");
     url.searchParams.set("order","viewCount");url.searchParams.set("regionCode",cfg.regionCode);url.searchParams.set("maxResults","25");url.searchParams.set("q",q);url.searchParams.set("key",key);
     if(publishedAfter)url.searchParams.set("publishedAfter",publishedAfter);
-    const rr=await fetch(url,{signal:AbortSignal.timeout(10000)});
-    if(!rr.ok)throw new Error("YouTube discovery is temporarily unavailable.");
+    let rr:Response;try{rr=await fetch(url,{signal:AbortSignal.timeout(10000)});}catch(error){if(error instanceof Error&&error.name==="TimeoutError")throw providerError("YOUTUBE_TIMEOUT","YouTube discovery timed out.");throw providerError("YOUTUBE_NETWORK_ERROR","YouTube discovery could not be reached.");}
+    if(!rr.ok)throw providerError(classifyUpstream(rr.status,"YOUTUBE"),"YouTube discovery is temporarily unavailable.");
     const jj:any=await rr.json();
     for(const item of Array.isArray(jj.items)?jj.items:[]){
       const id=String(item.id?.videoId||"");if(id)candidates.set(id,{id,snippet:item.snippet||{}});
@@ -115,8 +117,8 @@ async function youtubeFetch(cfg:TrendingConfig){
   const ids=[...candidates.keys()].slice(0,50);
   const url=new URL("https://www.googleapis.com/youtube/v3/videos");
   url.searchParams.set("part","snippet,contentDetails,status,statistics");url.searchParams.set("id",ids.join(","));url.searchParams.set("key",key);
-  const rr=await fetch(url,{signal:AbortSignal.timeout(10000)});
-  if(!rr.ok)throw new Error("YouTube metadata is temporarily unavailable.");
+  let rr:Response;try{rr=await fetch(url,{signal:AbortSignal.timeout(10000)});}catch(error){if(error instanceof Error&&error.name==="TimeoutError")throw providerError("YOUTUBE_TIMEOUT","YouTube metadata request timed out.");throw providerError("YOUTUBE_NETWORK_ERROR","YouTube metadata could not be reached.");}
+  if(!rr.ok)throw providerError(classifyUpstream(rr.status,"YOUTUBE"),"YouTube metadata is temporarily unavailable.");
   const jj:any=await rr.json();const out:TrendingVideo[]=[];
   for(const item of Array.isArray(jj.items)?jj.items:[]){
     const snippet=item.snippet||{};const duration=parseDuration(String(item.contentDetails?.duration||""));
@@ -130,14 +132,16 @@ async function youtubeFetch(cfg:TrendingConfig){
   return dedupeAndRank(out,cfg);
 }
 async function tmdbFetch(cfg:TrendingConfig){
-  const token=process.env.TMDB_API_READ_TOKEN||"";if(!token)return [];
-  const base="https://api.themoviedb.org/3/movie/popular?language=en-US&page=1&region="+encodeURIComponent(cfg.regionCode);
-  const rr=await fetch(base,{headers:{Authorization:"Bearer "+token},signal:AbortSignal.timeout(10000)});
-  if(!rr.ok)throw new Error("Movie trailer discovery is temporarily unavailable.");
+  const token=process.env.TMDB_API_READ_TOKEN||"";const apiKey=process.env.TMDB_API_KEY||process.env.TMDB_API||"";if(!token&&!apiKey)return [];
+  const authHeaders=token?{Authorization:"Bearer "+token}:{accept:"application/json"};
+  const base="https://api.themoviedb.org/3/movie/popular?language=en-US&page=1&region="+encodeURIComponent(cfg.regionCode)+(token?"":"&api_key="+encodeURIComponent(apiKey));
+  let rr:Response;try{rr=await fetch(base,{headers:authHeaders,signal:AbortSignal.timeout(10000)});}catch(error){if(error instanceof Error&&error.name==="TimeoutError")throw providerError("TMDB_TIMEOUT","TMDB request timed out.");throw providerError("TMDB_SERVICE_UNAVAILABLE","TMDB could not be reached.");}
+  if(!rr.ok)throw providerError(classifyUpstream(rr.status,"TMDB"),"Movie discovery is temporarily unavailable.");
   const data:any=await rr.json();const movies=Array.isArray(data.results)?data.results.slice(0,15):[];const out:TrendingVideo[]=[];
   for(const movie of movies){
     try{
-      const vr=await fetch("https://api.themoviedb.org/3/movie/"+movie.id+"?append_to_response=videos&language=en-US",{headers:{Authorization:"Bearer "+token},signal:AbortSignal.timeout(8000)});
+      const detailUrl="https://api.themoviedb.org/3/movie/"+movie.id+"?append_to_response=videos&language=en-US"+(token?"":"&api_key="+encodeURIComponent(apiKey));
+      const vr=await fetch(detailUrl,{headers:authHeaders,signal:AbortSignal.timeout(8000)});
       if(!vr.ok)continue;const detail:any=await vr.json();const videos=Array.isArray(detail.videos?.results)?detail.videos.results:[];
       const selected=videos.find((v:any)=>v.site==="YouTube"&&v.type==="Trailer"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&v.type==="Teaser"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser"));
       if(!selected?.key)continue;
@@ -150,12 +154,12 @@ async function tmdbFetch(cfg:TrendingConfig){
 }
 async function fetchTrending(cfg:TrendingConfig){
   let pool:TrendingVideo[]=[];
-  try{pool=await youtubeFetch(cfg);}catch(error){console.error("[trending] YouTube discovery failed:",error instanceof Error?error.message:"unknown");}
+  try{pool=await youtubeFetch(cfg);}catch(error){console.error("[trending] YouTube discovery failed:",(error as any)?.code||"YOUTUBE_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");}
   if(pool.length<5){
     try{
       const fallback=await tmdbFetch(cfg);
       pool=dedupeAndRank([...pool,...fallback],cfg);
-    }catch(error){console.error("[trending] TMDB fallback failed:",error instanceof Error?error.message:"unknown");}
+    }catch(error){console.error("[trending] TMDB fallback failed:",(error as any)?.code||"TMDB_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");}
   }
   if(!pool.length)throw new Error("Trending movie trailers are temporarily unavailable. Please try again.");
   return pool;
@@ -196,7 +200,13 @@ export async function getTrendingVideoForClient(clientId:string){
     void getPool(cfg,true).catch(error=>console.error("[trending] background refresh failed:",error instanceof Error?error.message:"unknown"));
     return choose(pool,clientId,cfg);
   }
-  throw new Error("No valid movie trailer is currently available. Please try again shortly.");
+  try{
+    const refreshed=await getPool(cfg,true);
+    return choose(refreshed,clientId,cfg);
+  }catch(error){
+    console.error("[trending] controlled empty-cache refresh failed:",(error as any)?.code||"TRENDING_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");
+    throw error;
+  }
 }
 export async function warmTrendingVideoCache(){const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0,expiresAt:null};const value=await getPool(cfg,false);const cached=cacheState.get(cacheKey);return {enabled:true,count:value.length,expiresAt:cached?.expiresAt??null};}
 export async function refreshTrendingVideoCache(){const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0,expiresAt:null};const value=await getPool(cfg,true);const cached=cacheState.get(cacheKey);return {enabled:true,count:value.length,expiresAt:cached?.expiresAt??null};}
