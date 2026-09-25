@@ -86,7 +86,7 @@ function asyncRoute(fn:(req:express.Request,res:express.Response,next:express.Ne
 function money(c:number){return Math.max(0,Math.round(c));}
 function defaultTaskAmount(balanceCents:number,_sequence:number){return Math.max(0,Math.min(balanceCents,100));}
 function defaultCommission(amount:number){return Math.max(1,Math.round(amount*.05));}
-function requiredWatchSeconds(durationSeconds:number){const configured=Number(process.env.TASK_REQUIRED_WATCH_SECONDS||30);const target=Number.isFinite(configured)&&configured>0?Math.floor(configured):30;return durationSeconds>0?Math.min(target,durationSeconds):target;}
+function requiredWatchSeconds(durationSeconds:number){const configured=Number(process.env.TASK_REQUIRED_WATCH_SECONDS||2.5);const target=Number.isFinite(configured)&&configured>0?configured:2.5;return durationSeconds>0?Math.min(target,durationSeconds):target;}
 async function taskPriceConfig(){
   const keys=["task_price_min_percent","task_price_max_percent","task_price_min_absolute_cents","task_price_max_absolute_cents","task_price_min_remaining_balance_cents"];
   const rows=await prisma.setting.findMany({where:{key:{in:keys}}});
@@ -134,7 +134,7 @@ function taskPublic(t:any,includeValues=false){
   return {
     id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
-    requiredWatchSeconds:t.requiredWatchSeconds??0,
+    requiredWatchSeconds:t.requiredWatchSeconds??2.5,
     movie:t.videoId?{title:t.videoTitle||t.title,posterUrl:t.videoThumbnailUrl||"",releaseDate:t.videoPublishedAt||null}:null,
     video:t.videoId?{
       provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||t.title,
@@ -190,24 +190,24 @@ app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{co
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
 app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const clientId=res.locals.auth.sub;
+  const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
+  if(idempotencyKey){const prior=await prisma.task.findFirst({where:{clientId,idempotencyKey,status:TaskStatus.PENDING}});if(prior)return res.json({success:true,task:taskPublic(prior,true),idempotent:true});}
   await ensureTaskBatch(clientId);
-  const task=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
-  if(!task)return res.status(409).json({error:"There are no pending tasks available right now.",code:"NO_PENDING_TASK"});
+  const active=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,revealedAt:{not:null}},orderBy:{revealedAt:"asc"}});
+  if(active)return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(active,true)});
+  const task=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,revealedAt:null},orderBy:{sequence:"asc"}});
+  if(!task)return res.status(409).json({success:false,error:"There are no pending tasks available right now.",code:"NO_PENDING_TASK"});
   const user=await prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}});
   const availableBalanceCents=Math.max(0,user.balanceCents-(user.frozenCents??0));
-  if(!task.revealedAt){
-    const amount=await randomTaskAmount(availableBalanceCents);
-    if(amount===null)return res.status(409).json({error:"Your balance is too low to start this task. Please add funds before continuing.",code:"LOW_BALANCE"});
-    try{
-      const video=await getTrendingVideoForClient(clientId);
-      const updated=await prisma.task.update({where:{id:task.id},data:{amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date(),requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"}});
-      return res.json({task:taskPublic(updated,true)});
-    }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
-  }
-  if(task.amountCents>availableBalanceCents)return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before continuing.",code:"LOW_BALANCE"});
-  if(!task.videoId)return res.status(503).json({error:"We couldn't load a movie trailer right now. Please try again shortly.",code:"NO_VALID_TRAILER"});
-  return res.json({task:taskPublic(task,true)});
-}));
+  const amount=await randomTaskAmount(availableBalanceCents);
+  if(amount===null)return res.status(409).json({success:false,error:"Your available balance is not enough to start this task. Please add funds before continuing.",code:"LOW_BALANCE"});
+  try{
+    const video=await getTrendingVideoForClient(clientId);const now=new Date();
+    const result=await prisma.task.updateMany({where:{id:task.id,status:TaskStatus.PENDING,revealedAt:null},data:{amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:now,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:idempotencyKey||null,watchAccumulatedMs:0,watchHeartbeatAt:null}});
+    if(result.count===0){const claimed=await prisma.task.findFirstOrThrow({where:{id:task.id,status:TaskStatus.PENDING}});return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(claimed,true)});}
+    const updated=await prisma.task.findUniqueOrThrow({where:{id:task.id}});return res.json({success:true,task:taskPublic(updated,true)});
+  }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
+});
 app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
   const [task,user]=await Promise.all([
@@ -265,6 +265,15 @@ app.post("/api/client/tasks/:id/video-retry",auth([Role.CLIENT]),asyncRoute(asyn
     res.json({task:taskPublic(updated,true)});
   }catch{return res.status(503).json({error:"This video isn't available right now. We're loading another one.",code:"TRENDING_VIDEO_UNAVAILABLE"});}
 }));
+app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");const clientId=res.locals.auth.sub;const d=z.object({playing:z.boolean()}).parse(req.body||{});
+  const task=await prisma.task.findFirst({where:{id,clientId,status:TaskStatus.PENDING}});
+  if(!task||!task.revealedAt||!task.videoId)return res.status(404).json({error:"Task not found."});
+  const now=new Date();const previous=task.watchHeartbeatAt;let accumulated=task.watchAccumulatedMs||0;
+  if(d.playing&&previous){accumulated=Math.min(600000,accumulated+Math.max(0,Math.min(1500,now.getTime()-previous.getTime())));}
+  const updated=await prisma.task.update({where:{id},data:{watchAccumulatedMs:accumulated,watchHeartbeatAt:d.playing?now:null}});
+  res.json({success:true,watchSeconds:updated.watchAccumulatedMs/1000,requiredWatchSeconds:updated.requiredWatchSeconds});
+}));
 app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
   const d=z.object({rating:z.coerce.number().int().min(1).max(5).nullable().optional(),watchedSeconds:z.coerce.number().finite().min(0).optional()}).parse(req.body||{});
@@ -274,15 +283,13 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
   if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before continuing."});
   if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});
   if(!task.videoId)return res.status(400).json({error:"A valid video has not been assigned to this task yet.",code:"NO_VALID_TRAILER"});
-  const claimedWatchSeconds=Math.floor(d.watchedSeconds??0);
-  if(task.requiredWatchSeconds>0){
-    const elapsedSinceReveal=task.revealedAt?Math.max(0,Math.floor((Date.now()-task.revealedAt.getTime())/1000)):0;
-    if(claimedWatchSeconds<task.requiredWatchSeconds)return res.status(409).json({error:"Please watch at least "+task.requiredWatchSeconds+" seconds of the trailer before submitting this task.",code:"WATCH_TIME_INCOMPLETE"});
-    if(claimedWatchSeconds>elapsedSinceReveal+2)return res.status(409).json({error:"The reported watch time is not valid for this task.",code:"WATCH_TIME_INVALID"});
-  }
+  const requiredMs=Math.round(Math.max(0,Number(task.requiredWatchSeconds||2.5))*1000);const serverWatchedMs=Math.max(0,Number(task.watchAccumulatedMs||0));const elapsedSinceRevealMs=task.revealedAt?Math.max(0,Date.now()-task.revealedAt.getTime()):0;
+  if(requiredMs>0){if(serverWatchedMs<requiredMs)return res.status(409).json({error:"Please watch at least "+Number(task.requiredWatchSeconds||2.5)+" seconds of the trailer before submitting this task.",code:"WATCH_TIME_INCOMPLETE"});if(serverWatchedMs>elapsedSinceRevealMs+1500)return res.status(409).json({error:"Please keep watching the trailer normally before submitting this task.",code:"WATCH_TIME_INVALID"});}
   const result=await prisma.$transaction(async tx=>{
     const fresh=await tx.task.findUniqueOrThrow({where:{id}});
     if(fresh.status!==TaskStatus.PENDING)throw new Error("This task has already been completed.");
+    const requiredMs=Math.round(Math.max(0,Number(fresh.requiredWatchSeconds||2.5))*1000);
+    if(requiredMs>0&&Number(fresh.watchAccumulatedMs||0)<requiredMs)throw new Error("Please watch the trailer for the required time before submitting this task.");
     const before=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}});
     const beforeAvailable=Math.max(0,before.balanceCents-(before.frozenCents??0));
     if(beforeAvailable<fresh.amountCents)throw new Error("Your available balance is not enough for this task. Please add funds before finishing it.");
