@@ -296,7 +296,10 @@ app.patch("/api/admin/trending-config",auth(staff),asyncRoute(async(req,res)=>{
     maximumDurationSeconds:z.coerce.number().int().min(0).max(86400).optional()
   }).parse(req.body||{});
   const map:any={enabled:"trending_videos_enabled",regionCode:"trending_region_code",categoryId:"trending_category_id",cacheTtlMinutes:"trending_cache_ttl_minutes",poolSize:"trending_pool_size",recentHistorySize:"trending_recent_history_size",minimumDurationSeconds:"trending_min_duration_seconds",maximumDurationSeconds:"trending_max_duration_seconds"};
-  for(const [field,key] of Object.entries(map))if((d as any)[field]!==undefined)await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:String((d as any)[field])},update:{value:String((d as any)[field])}});
+  for(const [field,key] of Object.entries(map) as Array<[string,string]>){
+    const value=(d as any)[field];
+    if(value!==undefined)await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:String(value)},update:{value:String(value)}});
+  }
   await audit(res.locals.auth.sub,undefined,"TRENDING_CONFIG_UPDATED",{fields:Object.keys(d)});
   res.json({config:await trendingConfig(),message:"Trending video settings saved."});
 }));
