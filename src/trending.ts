@@ -162,7 +162,7 @@ async function fetchTrending(cfg:TrendingConfig){
 }
 async function getPool(cfg:TrendingConfig,forceRefresh=false){
   const cached=cacheState.get(cacheKey);
-  if(!forceRefresh&&cached&&cached.expiresAt>Date.now()&&cached.value.length)return cached.value;
+  if(!forceRefresh&&cached?.value.length)return cached.value;
   const running=refreshState.get(cacheKey);if(running)return running;
   const promise=fetchTrending(cfg).then(value=>{cacheState.set(cacheKey,{expiresAt:Date.now()+cfg.cacheTtlMs,value});return value;}).finally(()=>refreshState.delete(cacheKey));
   refreshState.set(cacheKey,promise);return promise;
@@ -174,9 +174,29 @@ function choose(pool:TrendingVideo[],clientId:string,cfg:TrendingConfig){
 }
 export async function getTrendingVideoForClient(clientId:string){
   const cfg=await config();if(!cfg.enabled)throw new Error("Trending movie trailer tasks are temporarily unavailable.");
-  try{return choose(await getPool(cfg),clientId,cfg);}catch(error){
-    const cached=cacheState.get(cacheKey);if(cached?.value.length)return choose(cached.value,clientId,cfg);throw error;
+  const cached=cacheState.get(cacheKey);
+  if(cached?.value.length){
+    if(cached.expiresAt<=Date.now())void getPool(cfg,true).catch(error=>console.error("[trending] background refresh failed:",error instanceof Error?error.message:"unknown"));
+    return choose(cached.value,clientId,cfg);
   }
+  const stored=await prisma.task.findMany({
+    where:{videoId:{not:null}},
+    orderBy:{revealedAt:"desc"},
+    take:50,
+    select:{videoProvider:true,videoId:true,videoTitle:true,videoChannelId:true,videoChannelTitle:true,videoThumbnailUrl:true,videoDurationSeconds:true,videoPublishedAt:true,videoCategoryId:true,videoViewCount:true,videoLikeCount:true,videoCommentCount:true,videoLiveBroadcastContent:true}
+  });
+  const storedPool:TrendingVideo[]=stored.filter(v=>v.videoId).map(v=>({
+    provider:"youtube",videoId:String(v.videoId),title:String(v.videoTitle||"Movie Trailer"),channelId:String(v.videoChannelId||""),channelTitle:String(v.videoChannelTitle||""),
+    thumbnailUrl:String(v.videoThumbnailUrl||""),durationSeconds:Number(v.videoDurationSeconds||0),publishedAt:v.videoPublishedAt?.toISOString()||"",
+    categoryId:String(v.videoCategoryId||""),description:"",viewCount:Number(v.videoViewCount||0),likeCount:Number(v.videoLikeCount||0),
+    commentCount:Number(v.videoCommentCount||0),liveBroadcastContent:String(v.videoLiveBroadcastContent||"none")
+  }));
+  if(storedPool.length){
+    const pool=dedupeAndRank(storedPool,cfg);cacheState.set(cacheKey,{expiresAt:Date.now()+cfg.cacheTtlMs,value:pool});
+    void getPool(cfg,true).catch(error=>console.error("[trending] background refresh failed:",error instanceof Error?error.message:"unknown"));
+    return choose(pool,clientId,cfg);
+  }
+  throw new Error("No valid movie trailer is currently available. Please try again shortly.");
 }
 export async function warmTrendingVideoCache(){const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0,expiresAt:null};const value=await getPool(cfg,false);const cached=cacheState.get(cacheKey);return {enabled:true,count:value.length,expiresAt:cached?.expiresAt??null};}
 export async function refreshTrendingVideoCache(){const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0,expiresAt:null};const value=await getPool(cfg,true);const cached=cacheState.get(cacheKey);return {enabled:true,count:value.length,expiresAt:cached?.expiresAt??null};}
