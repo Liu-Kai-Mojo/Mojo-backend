@@ -152,8 +152,10 @@ model Task {
   videoDurationSeconds Int?
   videoPublishedAt DateTime?
   videoCategoryId String?
-  requiredWatchSeconds Int @default(0)
-  tmdbMovieId    Int?
+  requiredWatchSeconds Float @default(2.5)
+  watchAccumulatedMs Int @default(0)
+  watchHeartbeatAt DateTime?
+  idempotencyKey String? @unique
   movieTitle     String?
   moviePosterUrl String?
   movieReleaseDate DateTime?
