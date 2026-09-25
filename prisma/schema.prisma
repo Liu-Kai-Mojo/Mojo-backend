@@ -139,6 +139,16 @@ model Task {
   isLucky        Boolean    @default(false)
   revealedAt     DateTime?
   completedAt    DateTime?
+  videoProvider  String?
+  videoId        String?
+  videoTitle     String?
+  videoChannelTitle String?
+  videoThumbnailUrl String?
+  videoDurationSeconds Int?
+  videoPublishedAt DateTime?
+  videoCategoryId String?
+  requiredWatchSeconds Int @default(0)
+  rating         Int?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
