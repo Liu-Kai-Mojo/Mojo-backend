@@ -175,9 +175,9 @@ async function refresh(cfg:TrendingConfig){
   const promise=discover(cfg).then(async pool=>{await writeCache(pool,cfg);return pool;}).finally(()=>refreshState.delete(cacheKey));
   refreshState.set(cacheKey,promise);return promise;
 }
-async function loadCache(cfg:TrendingConfig){
+async function loadCache(cfg:TrendingConfig,allowStale=false){
   const cutoff=new Date(Date.now()-cfg.freshnessDays*86400000);
-  const rows=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public",publishedAt:{gte:cutoff},lastValidatedAt:{gte:cutoff}},orderBy:{score:"desc"},take:cfg.poolSize});
+  const rows=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public",...(allowStale?{}:{publishedAt:{gte:cutoff},lastValidatedAt:{gte:cutoff}})},orderBy:{score:"desc"},take:cfg.poolSize});
   return rows.map(fromCache);
 }
 async function select(clientId:string,pool:TrendingVideo[],cfg:TrendingConfig){
@@ -193,11 +193,10 @@ export async function getTrendingVideoForClient(clientId:string){
   const cfg=await config();
   if(!cfg.enabled)throw providerError("TRAILER_TASKS_DISABLED","Movie trailer tasks are temporarily unavailable.");
   const pool=await loadCache(cfg);
-  if(pool.length){
-    const newest=pool[0];
-    if(Date.now()-Date.parse(newest.publishedAt)>cfg.cacheTtlMs)void refresh(cfg).catch(error=>console.error("[trending] background refresh failed",(error as any)?.code||"UNKNOWN"));
-    return select(clientId,pool,cfg);
-  }
+  if(pool.length){void refresh(cfg).catch(error=>console.error("[trending] background refresh failed",(error as any)?.code||"UNKNOWN"));return select(clientId,pool,cfg);}
+  const stale=await loadCache(cfg,true);
+  if(stale.length){void refresh(cfg).catch(error=>console.error("[trending] stale-cache refresh failed",(error as any)?.code||"UNKNOWN"));return select(clientId,stale,cfg);}
+
   try{return select(clientId,await refresh(cfg),cfg);}
   catch(error){
     const stale=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public"},orderBy:{score:"desc"},take:cfg.poolSize});
@@ -209,6 +208,8 @@ export async function getCurrentTrailerCandidates(){
   const cfg=await config();
   const pool=await loadCache(cfg);
   if(pool.length)return pool;
+  const stale=await loadCache(cfg,true);
+  if(stale.length){void refresh(cfg).catch(()=>{});return stale;}
   try{return await refresh(cfg);}catch{return [];}
 }
 export async function warmTrendingVideoCache(){
