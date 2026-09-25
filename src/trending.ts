@@ -135,6 +135,7 @@ export async function getTrendingVideoForClient(clientId:string){
     throw error;
   }
 }
+export async function warmTrendingVideoCache(){ const cfg=await config(); if(!cfg.enabled)return {enabled:false,count:0,expiresAt:null}; const value=await getPool(cfg,false); const cached=cacheState.get(cacheKey); return {enabled:true,count:value.length,expiresAt:cached?.expiresAt??null}; }
 export async function refreshTrendingVideoCache(){
   const cfg=await config();
   if(!cfg.enabled)return {enabled:false,count:0,expiresAt:null};
