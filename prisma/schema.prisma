@@ -153,6 +153,10 @@ model Task {
   videoPublishedAt DateTime?
   videoCategoryId String?
   requiredWatchSeconds Int @default(0)
+  tmdbMovieId    Int?
+  movieTitle     String?
+  moviePosterUrl String?
+  movieReleaseDate DateTime?
   rating         Int?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
