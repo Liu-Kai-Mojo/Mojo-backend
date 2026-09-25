@@ -142,7 +142,7 @@ async function tmdbFetch(cfg:TrendingConfig){
       const selected=videos.find((v:any)=>v.site==="YouTube"&&v.type==="Trailer"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&v.type==="Teaser"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser"));
       if(!selected?.key)continue;
       const published=String(selected.published_at||movie.release_date||"");const duration=0;
-      if(cfg.freshnessDays&&Date.parse(published)<Date.now()-cfg.freshnessDays*86400000)continue;
+      if(cfg.freshnessDays&&selected.published_at&&Date.parse(published)<Date.now()-cfg.freshnessDays*86400000)continue;
       out.push({provider:"youtube",videoId:String(selected.key),title:String(selected.name||movie.title||"Movie Trailer"),description:String(movie.overview||""),channelId:"",channelTitle:"",thumbnailUrl:"https://i.ytimg.com/vi/"+selected.key+"/hqdefault.jpg",durationSeconds:duration,publishedAt:published,categoryId:cfg.categoryId,viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none"});
     }catch{}
   }
