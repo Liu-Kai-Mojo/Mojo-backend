@@ -8,6 +8,7 @@ import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId } from "./utils/codes.js";
+import { getTrendingVideoForClient, trendingConfig } from "./trending.js";
 
 const app=express();
 app.set("trust proxy",1);
@@ -123,7 +124,19 @@ async function fetchMovieFeed(){
   }
   return out;
 }
-function taskPublic(t:any,includeValues=false){return {id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,revealedAt:t.revealedAt,completedAt:t.completedAt,...(includeValues?{amountCents:t.amountCents,commissionCents:t.commissionCents}: {})};}
+function taskPublic(t:any,includeValues=false){
+  return {
+    id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
+    revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
+    requiredWatchSeconds:t.requiredWatchSeconds??0,
+    video:t.videoId?{
+      provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||t.title,
+      channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||"",
+      durationSeconds:t.videoDurationSeconds??0,publishedAt:t.videoPublishedAt,categoryId:t.videoCategoryId||""
+    }:null,
+    ...(includeValues?{amountCents:t.amountCents,commissionCents:t.commissionCents}: {})
+  };
+}
 function staffWhere(role:Role,id:string){return role===Role.OWNER?{role:Role.CLIENT}:{role:Role.CLIENT,adminId:id};}
 function canManageClient(role:Role,id:string,clientId:string){return prisma.user.findFirst({where:{id:clientId,role:Role.CLIENT,...(role===Role.ADMIN?{adminId:id}:{})}});}
 
@@ -167,8 +180,81 @@ app.get("/api/client/movies/:id/videos",auth([Role.CLIENT]),asyncRoute(async(req
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.task.findMany({where:{clientId:userId},orderBy:{sequence:"asc"}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),transactions:txs,messages});}));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
-app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{const id=param(req,"id");const clientId=res.locals.auth.sub;const [task,user]=await Promise.all([prisma.task.findFirst({where:{id,clientId}}),prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}})]);if(!task)return res.status(404).json({error:"Task not found."});const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before opening another one."});let updated=task;if(!task.revealedAt){const amount=randomTaskAmount(user.balanceCents,task.sequence);if(user.balanceCents<amount)return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before starting the next task."});updated=await prisma.task.update({where:{id},data:{amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date()}})}else if(task.amountCents>user.balanceCents)return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before continuing."});res.json({task:taskPublic(updated,true)});}));
-app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{const id=param(req,"id");const clientId=res.locals.auth.sub;const task=await prisma.task.findFirst({where:{id,clientId}});if(!task)return res.status(404).json({error:"Task not found."});const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before continuing."});if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});const result=await prisma.$transaction(async tx=>{const fresh=await tx.task.findUniqueOrThrow({where:{id}});if(fresh.status!==TaskStatus.PENDING)throw new Error("This task has already been completed.");const before=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}});if(before.balanceCents<fresh.amountCents)throw new Error("Your available balance is not enough for this task. Please add funds before finishing it.");const user=await tx.user.update({where:{id:clientId},data:{balanceCents:{increment:fresh.commissionCents}}});const completed=await tx.task.update({where:{id},data:{status:TaskStatus.COMPLETED,completedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:clientId,amountCents:fresh.commissionCents,type:"TASK_COMMISSION",note:`Task #${fresh.sequence} commission`}});return {user,task:completed};});res.json({user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task completed and your balance has been updated."});}));
+app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");const clientId=res.locals.auth.sub;
+  const [task,user]=await Promise.all([
+    prisma.task.findFirst({where:{id,clientId}}),
+    prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}})
+  ]);
+  if(!task)return res.status(404).json({error:"Task not found."});
+  const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
+  if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before opening another one."});
+  let updated=task;
+  if(!task.revealedAt){
+    const amount=randomTaskAmount(user.balanceCents,task.sequence);
+    if(user.balanceCents<amount)return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before starting the next task."});
+    try{
+      const video=await getTrendingVideoForClient(clientId);
+      updated=await prisma.task.update({where:{id},data:{
+        amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date(),
+        videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelTitle:video.channelTitle,
+        videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
+        videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId
+      }});
+    }catch(error){
+      const message=error instanceof Error?error.message:"Trending videos are temporarily unavailable.";
+      return res.status(503).json({error:message,code:"TRENDING_VIDEO_UNAVAILABLE"});
+    }
+  }else if(task.amountCents>user.balanceCents){
+    return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before continuing."});
+  }else if(!task.videoId){
+    try{
+      const video=await getTrendingVideoForClient(clientId);
+      updated=await prisma.task.update({where:{id},data:{
+        videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelTitle:video.channelTitle,
+        videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
+        videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId
+      }});
+    }catch{return res.status(503).json({error:"This video isn't available right now. We're loading another one.",code:"TRENDING_VIDEO_UNAVAILABLE"});}
+  }
+  res.json({task:taskPublic(updated,true)});
+}));
+app.post("/api/client/tasks/:id/video-retry",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");const clientId=res.locals.auth.sub;
+  const task=await prisma.task.findFirst({where:{id,clientId,status:TaskStatus.PENDING}});
+  if(!task)return res.status(404).json({error:"Task not found."});
+  if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});
+  try{
+    const video=await getTrendingVideoForClient(clientId);
+    const updated=await prisma.task.update({where:{id},data:{
+      videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelTitle:video.channelTitle,
+      videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
+      videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId
+    }});
+    res.json({task:taskPublic(updated,true)});
+  }catch{return res.status(503).json({error:"This video isn't available right now. We're loading another one.",code:"TRENDING_VIDEO_UNAVAILABLE"});}
+}));
+app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");const clientId=res.locals.auth.sub;
+  const d=z.object({rating:z.coerce.number().int().min(1).max(5).nullable().optional()}).parse(req.body||{});
+  const task=await prisma.task.findFirst({where:{id,clientId}});
+  if(!task)return res.status(404).json({error:"Task not found."});
+  const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
+  if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before continuing."});
+  if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});
+  if(!task.videoId)return res.status(400).json({error:"A valid video has not been assigned to this task yet."});
+  const result=await prisma.$transaction(async tx=>{
+    const fresh=await tx.task.findUniqueOrThrow({where:{id}});
+    if(fresh.status!==TaskStatus.PENDING)throw new Error("This task has already been completed.");
+    const before=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}});
+    if(before.balanceCents<fresh.amountCents)throw new Error("Your available balance is not enough for this task. Please add funds before finishing it.");
+    const user=await tx.user.update({where:{id:clientId},data:{balanceCents:{increment:fresh.commissionCents}}});
+    const completed=await tx.task.update({where:{id},data:{status:TaskStatus.COMPLETED,completedAt:new Date(),rating:d.rating??fresh.rating}});
+    await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:clientId,amountCents:fresh.commissionCents,type:"TASK_COMMISSION",note:`Task #${fresh.sequence} commission` }});
+    return {user,task:completed};
+  });
+  res.json({user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task completed and your balance has been updated."});
+}));
 app.get("/api/client/messages",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const messages=await prisma.message.findMany({where:{OR:[{senderId:res.locals.auth.sub},{recipientId:res.locals.auth.sub}]},orderBy:{createdAt:"asc"}});res.json({messages});}));
 app.post("/api/client/messages",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{const d=messageSchema.parse(req.body);const sender=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub},select:{adminId:true}});const recipient=d.recipientId?await prisma.user.findFirst({where:{id:d.recipientId,role:{in:[Role.ADMIN,Role.OWNER]},active:true}}):sender.adminId?await prisma.user.findFirst({where:{id:sender.adminId,role:Role.ADMIN,active:true}}):null;if(!recipient)return res.status(400).json({error:"Your account is not currently connected to an active administrator."});const msg=await prisma.message.create({data:{id:await uniqueMessageId(),senderId:res.locals.auth.sub,recipientId:recipient.id,subject:d.subject,body:d.body}});res.status(201).json({message:msg});}));
 app.get("/api/client/account",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
@@ -201,6 +287,19 @@ app.patch("/api/client/account/wallet",auth([Role.CLIENT]),asyncRoute(async(req,
 }));
 
 const staff=[Role.OWNER,Role.ADMIN];
+app.get("/api/admin/trending-config",auth(staff),asyncRoute(async(_req,res)=>{res.json({config:await trendingConfig()});}));
+app.patch("/api/admin/trending-config",auth(staff),asyncRoute(async(req,res)=>{
+  const d=z.object({
+    enabled:z.boolean().optional(),regionCode:z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),categoryId:z.string().trim().min(1).max(10).optional(),
+    cacheTtlMinutes:z.coerce.number().int().min(1).max(1440).optional(),poolSize:z.coerce.number().int().min(5).max(50).optional(),
+    recentHistorySize:z.coerce.number().int().min(1).max(50).optional(),minimumDurationSeconds:z.coerce.number().int().min(0).max(86400).optional(),
+    maximumDurationSeconds:z.coerce.number().int().min(0).max(86400).optional()
+  }).parse(req.body||{});
+  const map:any={enabled:"trending_videos_enabled",regionCode:"trending_region_code",categoryId:"trending_category_id",cacheTtlMinutes:"trending_cache_ttl_minutes",poolSize:"trending_pool_size",recentHistorySize:"trending_recent_history_size",minimumDurationSeconds:"trending_min_duration_seconds",maximumDurationSeconds:"trending_max_duration_seconds"};
+  for(const [field,key] of Object.entries(map))if((d as any)[field]!==undefined)await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:String((d as any)[field])},update:{value:String((d as any)[field])}});
+  await audit(res.locals.auth.sub,undefined,"TRENDING_CONFIG_UPDATED",{fields:Object.keys(d)});
+  res.json({config:await trendingConfig(),message:"Trending video settings saved."});
+}));
 app.get("/api/admin/dashboard",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const where=staffWhere(role,res.locals.auth.sub);const [clients,admins,messages,pendingTasks,completedTasks]=await Promise.all([prisma.user.count({where:{...where,active:true}}),prisma.user.count({where:{role:Role.ADMIN,active:true}}),prisma.message.count({where:role===Role.OWNER?{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]}}:{status:{in:[MessageStatus.OPEN,MessageStatus.REPLIED]},OR:[{recipientId:res.locals.auth.sub},{sender:{adminId:res.locals.auth.sub}}]}}),prisma.task.count({where:{status:TaskStatus.PENDING,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}}),prisma.task.count({where:{status:TaskStatus.COMPLETED,...(role===Role.ADMIN?{client:{adminId:res.locals.auth.sub}}:{})}})]);res.json({clients,admins,messages,pendingTasks,completedTasks});}));
 app.get("/api/admin/clients",auth(staff),asyncRoute(async(_req,res)=>{const role=res.locals.auth.role;const clients=await prisma.user.findMany({where:staffWhere(role,res.locals.auth.sub),orderBy:{createdAt:"desc"}});res.json({clients:clients.map(safeUser)});}));
 app.get("/api/admin/balances",auth([Role.ADMIN]),asyncRoute(async(_req,res)=>{
