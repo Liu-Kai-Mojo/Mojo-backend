@@ -9,7 +9,7 @@ import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId } from "./utils/codes.js";
-import { getTrendingVideoForClient, trendingConfig, warmTrendingVideoCache } from "./trending.js";
+import { getTrendingVideoForClient, getCurrentTrailerCandidates, trendingConfig, warmTrendingVideoCache } from "./trending.js";
 
 const app=express();
 app.set("trust proxy",1);
@@ -130,30 +130,12 @@ async function ensureTaskBatch(clientId:string,assignedById?:string){
   if(count>=30)return;
   await prisma.$transaction(async tx=>{for(let i=count+1;i<=30;i++){await tx.task.create({data:{id:await uniqueTaskId(),clientId,assignedById,sequence:i,title:i===2?"Lucky combination":"Daily task",amountCents:0,commissionCents:0,isLucky:i===2}});}});
 }
-async function fetchMovieFeed(){
-  const token=process.env.TMDB_API_READ_TOKEN||"";const apiKey=process.env.TMDB_API_KEY||process.env.TMDB_API||"";
-  if(!token&&!apiKey)return [];
-  const headers=token?{Authorization:"Bearer "+token}:{accept:"application/json"};
-  const region=(process.env.TRENDING_REGION_CODE||"MM").toUpperCase();
-  const endpoints=[
-    "https://api.themoviedb.org/3/movie/now_playing?language=en-US&page=1&region="+encodeURIComponent(region),
-    "https://api.themoviedb.org/3/movie/upcoming?language=en-US&page=1&region="+encodeURIComponent(region),
-    "https://api.themoviedb.org/3/movie/popular?language=en-US&page=1&region="+encodeURIComponent(region)
-  ].map(url=>token?url:url+"&api_key="+encodeURIComponent(apiKey));
-  const results:any[]=[];
-  for(const url of endpoints){
-    try{const rr=await fetch(url,{headers,signal:AbortSignal.timeout(8000)});if(!rr.ok)continue;const data:any=await rr.json();for(const movie of Array.isArray(data.results)?data.results:[])results.push(movie);}catch{}
-  }
-  const seen=new Set<number>();
-  return results.filter(movie=>{const id=Number(movie?.id);if(!id||seen.has(id))return false;seen.add(id);return Boolean(movie?.title);}).slice(0,30).map(movie=>({title:String(movie.title),tmdbId:Number(movie.id),posterUrl:movie.poster_path?"https://image.tmdb.org/t/p/w780"+movie.poster_path:"",priceCents:0,trailerUrl:""}));
-}
-
 function taskPublic(t:any,includeValues=false){
   return {
     id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
     requiredWatchSeconds:t.requiredWatchSeconds??0,
-    movie:t.tmdbMovieId?{tmdbId:t.tmdbMovieId,title:t.movieTitle||"",posterUrl:t.moviePosterUrl||"",releaseDate:t.movieReleaseDate}:null,
+    movie:t.videoId?{title:t.videoTitle||t.title,posterUrl:t.videoThumbnailUrl||"",releaseDate:t.videoPublishedAt||null}:null,
     video:t.videoId?{
       provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||t.title,
       channelId:t.videoChannelId||"",channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||"",
@@ -202,8 +184,7 @@ app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const setting=admin?await prisma.setting.findUnique({where:{key:`telegram_admin_${admin.id}`}}):null;
   res.json({admin:admin?{id:admin.id,name:admin.name}:null,telegramUsername:setting?.value||null});
 }));
-app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const cache=(globalThis as any).__tmdbMovieFeedCache as {expires:number;value:any[]}|undefined;const pending=(globalThis as any).__tmdbMovieFeedPending as Promise<any[]>|undefined;if(cache&&cache.expires>Date.now())return res.json({movies:cache.value});const promise=pending||fetchMovieFeed();(globalThis as any).__tmdbMovieFeedPending=promise;try{const movies=await promise;(globalThis as any).__tmdbMovieFeedCache={expires:Date.now()+10*60*1000,value:movies};res.json({movies});}finally{if((globalThis as any).__tmdbMovieFeedPending===promise)(globalThis as any).__tmdbMovieFeedPending=undefined}}));
-app.get("/api/client/movies/:id/videos",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{const id=Number(param(req,"id"));if(!Number.isInteger(id)||id<=0)return res.status(400).json({error:"Invalid movie id."});const token=process.env.TMDB_API_READ_TOKEN||"";const key=process.env.TMDB_API_KEY||process.env.TMDB_API||"";if(!token&&!key)return res.status(503).json({error:"Movie video service is not configured.",code:"TMDB_NOT_CONFIGURED"});const cache=(globalThis as any).__tmdbVideoCache as Map<number,{expires:number;value:any}>|undefined;const videoCache=cache||new Map<number,{expires:number;value:any}>();(globalThis as any).__tmdbVideoCache=videoCache;const hit=videoCache.get(id);if(hit&&hit.expires>Date.now())return res.json(hit.value);try{const base=`https://api.themoviedb.org/3/movie/${id}?append_to_response=videos&language=en-US`;const url=token?base:base+`&api_key=${encodeURIComponent(key)}`;const rr=await fetch(url,{headers:token?{Authorization:`Bearer ${token}`}:{accept:"application/json"},signal:AbortSignal.timeout(8000)});if(!rr.ok){if(rr.status===404)return res.status(404).json({error:"Movie not found."});if(rr.status===429)return res.status(429).json({error:"Movie video service is temporarily busy.",code:"TMDB_RATE_LIMIT"});return res.status(502).json({error:"Movie video service is unavailable.",code:"TMDB_UPSTREAM_ERROR"});}const movie:any=await rr.json();const videos=Array.isArray(movie.videos?.results)?movie.videos.results:[];const selected=videos.find((v:any)=>v.site==="YouTube"&&v.type==="Trailer"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&v.type==="Teaser"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser"));const value={movieId:id,title:movie.title||"",video:selected?{key:selected.key,name:selected.name,type:selected.type,site:selected.site,embedUrl:`https://www.youtube.com/embed/${selected.key}?autoplay=1&rel=0&modestbranding=1`}:null};videoCache.set(id,{expires:Date.now()+10*60*1000,value});res.json(value);}catch{res.status(502).json({error:"Movie video service is unavailable.",code:"TMDB_NETWORK_ERROR"});}}));
+app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({title:v.title,videoId:v.videoId,posterUrl:v.thumbnailUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.task.findMany({where:{clientId:userId},orderBy:{sequence:"asc"}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),transactions:txs,messages});}));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
@@ -219,7 +200,7 @@ app.post("/api/client/tasks/start",auth([Role.CLIENT]),asyncRoute(async(req,res)
     if(amount===null)return res.status(409).json({error:"Your balance is too low to start this task. Please add funds before continuing.",code:"LOW_BALANCE"});
     try{
       const video=await getTrendingVideoForClient(clientId);
-      const updated=await prisma.task.update({where:{id:task.id},data:{amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date(),requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),tmdbMovieId:video.tmdbMovieId??null,movieTitle:video.movieTitle??null,moviePosterUrl:video.moviePosterUrl??null,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"}});
+      const updated=await prisma.task.update({where:{id:task.id},data:{amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date(),requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"}});
       return res.json({task:taskPublic(updated,true)});
     }catch(error){const code=String((error as any)?.code||"TRENDING_VIDEO_UNAVAILABLE");console.error("[task-start]",code,error instanceof Error?error.message:error);return res.status(503).json({error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
   }
