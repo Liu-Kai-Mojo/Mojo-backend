@@ -15,6 +15,10 @@ export type TrendingVideo = {
   likeCount:number;
   commentCount:number;
   liveBroadcastContent:string;
+  tmdbMovieId?:number;
+  movieTitle?:string;
+  moviePosterUrl?:string;
+  movieReleaseDate?:string|null;
 };
 
 type TrendingConfig = {
@@ -133,35 +137,51 @@ async function youtubeFetch(cfg:TrendingConfig){
 }
 async function tmdbFetch(cfg:TrendingConfig){
   const token=process.env.TMDB_API_READ_TOKEN||"";const apiKey=process.env.TMDB_API_KEY||process.env.TMDB_API||"";if(!token&&!apiKey)return [];
-  const authHeaders=token?{Authorization:"Bearer "+token}:{accept:"application/json"};
-  const base="https://api.themoviedb.org/3/movie/popular?language=en-US&page=1&region="+encodeURIComponent(cfg.regionCode)+(token?"":"&api_key="+encodeURIComponent(apiKey));
-  let rr:Response;try{rr=await fetch(base,{headers:authHeaders,signal:AbortSignal.timeout(10000)});}catch(error){if(error instanceof Error&&error.name==="TimeoutError")throw providerError("TMDB_TIMEOUT","TMDB request timed out.");throw providerError("TMDB_SERVICE_UNAVAILABLE","TMDB could not be reached.");}
-  if(!rr.ok)throw providerError(classifyUpstream(rr.status,"TMDB"),"Movie discovery is temporarily unavailable.");
-  const data:any=await rr.json();const movies=Array.isArray(data.results)?data.results.slice(0,15):[];const out:TrendingVideo[]=[];
-  for(const movie of movies){
+  const headers=token?{Authorization:"Bearer "+token}:{accept:"application/json"};
+  const region=encodeURIComponent(cfg.regionCode);
+  const endpoints=[
+    "https://api.themoviedb.org/3/movie/now_playing?language=en-US&page=1&region="+region,
+    "https://api.themoviedb.org/3/movie/upcoming?language=en-US&page=1&region="+region,
+    "https://api.themoviedb.org/3/movie/popular?language=en-US&page=1&region="+region
+  ].map(url=>token?url:url+"&api_key="+encodeURIComponent(apiKey));
+  const movies:any[]=[];
+  for(const url of endpoints){
+    let rr:Response;try{rr=await fetch(url,{headers,signal:AbortSignal.timeout(8000)});}catch(error){if(error instanceof Error&&error.name==="TimeoutError")throw providerError("TMDB_TIMEOUT","TMDB request timed out.");throw providerError("TMDB_SERVICE_UNAVAILABLE","TMDB could not be reached.");}
+    if(!rr.ok)throw providerError(classifyUpstream(rr.status,"TMDB"),"Movie discovery is temporarily unavailable.");
+    const data:any=await rr.json();for(const movie of Array.isArray(data.results)?data.results:[])movies.push(movie);
+  }
+  const unique=movies.filter((m,i,a)=>m?.id&&a.findIndex(x=>x?.id===m.id)===i).sort((a,b)=>Number(b.popularity||0)-Number(a.popularity||0)).slice(0,15);
+  const candidateMap=new Map<string,any>();
+  for(const movie of unique){
     try{
-      const detailUrl="https://api.themoviedb.org/3/movie/"+movie.id+"?append_to_response=videos&language=en-US"+(token?"":"&api_key="+encodeURIComponent(apiKey));
-      const vr=await fetch(detailUrl,{headers:authHeaders,signal:AbortSignal.timeout(8000)});
-      if(!vr.ok)continue;const detail:any=await vr.json();const videos=Array.isArray(detail.videos?.results)?detail.videos.results:[];
-      const selected=videos.find((v:any)=>v.site==="YouTube"&&v.type==="Trailer"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&v.type==="Teaser"&&v.official!==false)||videos.find((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser"));
-      if(!selected?.key)continue;
-      const published=String(selected.published_at||movie.release_date||"");const duration=0;
-      if(cfg.freshnessDays&&selected.published_at&&Date.parse(published)<Date.now()-cfg.freshnessDays*86400000)continue;
-      out.push({provider:"youtube",videoId:String(selected.key),title:String(selected.name||movie.title||"Movie Trailer"),description:String(movie.overview||""),channelId:"",channelTitle:"",thumbnailUrl:"https://i.ytimg.com/vi/"+selected.key+"/hqdefault.jpg",durationSeconds:duration,publishedAt:published,categoryId:cfg.categoryId,viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none"});
+      const url="https://api.themoviedb.org/3/movie/"+movie.id+"?append_to_response=videos&language=en-US"+(token?"":"&api_key="+encodeURIComponent(apiKey));
+      const rr=await fetch(url,{headers,signal:AbortSignal.timeout(8000)});if(!rr.ok)continue;
+      const detail:any=await rr.json();const videos=Array.isArray(detail.videos?.results)?detail.videos.results:[];
+      const candidates=videos.filter((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser")&&v.key).sort((a:any,b:any)=>Number(b.official===true)-Number(a.official===true));
+      const selected=candidates[0];if(!selected?.key)continue;
+      candidateMap.set(String(selected.key),{movie,selected});
     }catch{}
   }
+  if(!candidateMap.size)return [];
+  return [...candidateMap.values()].map(({movie,selected})=>({provider:"youtube",videoId:String(selected.key),title:String(selected.name||movie.title||"Movie Trailer"),description:String(movie.overview||""),channelId:"",channelTitle:"",thumbnailUrl:"https://i.ytimg.com/vi/"+selected.key+"/hqdefault.jpg",durationSeconds:0,publishedAt:String(selected.published_at||movie.release_date||""),categoryId:cfg.categoryId,viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",tmdbMovieId:Number(movie.id),movieTitle:String(movie.title||""),moviePosterUrl:movie.poster_path?"https://image.tmdb.org/t/p/w780"+movie.poster_path:"",movieReleaseDate:movie.release_date?String(movie.release_date):null}));
+}
+async function youtubeValidateCandidates(candidates:TrendingVideo[],cfg:TrendingConfig){
+  const key=process.env.YOUTUBE_API_KEY||process.env.YOUTUBE_DATA_API_KEY||"";if(!key||!candidates.length)return [];
+  const ids=[...new Set(candidates.map(v=>v.videoId))].slice(0,50);const url=new URL("https://www.googleapis.com/youtube/v3/videos");url.searchParams.set("part","snippet,contentDetails,status,statistics");url.searchParams.set("id",ids.join(","));url.searchParams.set("key",key);
+  let rr:Response;try{rr=await fetch(url,{signal:AbortSignal.timeout(10000)});}catch(error){if(error instanceof Error&&error.name==="TimeoutError")throw providerError("YOUTUBE_TIMEOUT","YouTube metadata request timed out.");throw providerError("YOUTUBE_NETWORK_ERROR","YouTube metadata could not be reached.");}
+  if(!rr.ok)throw providerError(classifyUpstream(rr.status,"YOUTUBE"),"YouTube metadata is temporarily unavailable.");
+  const data:any=await rr.json();const byId=new Map<string,any>((Array.isArray(data.items)?data.items:[]).map((x:any)=>[String(x.id),x]));const out:TrendingVideo[]=[];
+  for(const candidate of candidates){const item=byId.get(candidate.videoId);if(!item)continue;const snippet=item.snippet||{};const duration=parseDuration(String(item.contentDetails?.duration||""));if(String(item.status?.privacyStatus||"")!=="public"||item.status?.embeddable!==true||duration<cfg.minDurationSeconds)continue;const published=String(snippet.publishedAt||candidate.publishedAt||"");if(cfg.freshnessDays&&published&&Date.parse(published)<Date.now()-cfg.freshnessDays*86400000)continue;out.push({...candidate,title:cleanTitle(String(snippet.title||candidate.title)),description:String(snippet.description||candidate.description||""),channelId:String(snippet.channelId||""),channelTitle:String(snippet.channelTitle||""),thumbnailUrl:String(snippet.thumbnails?.high?.url||snippet.thumbnails?.medium?.url||candidate.thumbnailUrl),durationSeconds:duration,publishedAt:published,categoryId:String(snippet.categoryId||candidate.categoryId),viewCount:Number(item.statistics?.viewCount||0),likeCount:Number(item.statistics?.likeCount||0),commentCount:Number(item.statistics?.commentCount||0),liveBroadcastContent:String(snippet.liveBroadcastContent||"none")});}
   return dedupeAndRank(out,cfg);
 }
+
 async function fetchTrending(cfg:TrendingConfig){
   let pool:TrendingVideo[]=[];
-  try{pool=await youtubeFetch(cfg);}catch(error){console.error("[trending] YouTube discovery failed:",(error as any)?.code||"YOUTUBE_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");}
-  if(pool.length<5){
-    try{
-      const fallback=await tmdbFetch(cfg);
-      pool=dedupeAndRank([...pool,...fallback],cfg);
-    }catch(error){console.error("[trending] TMDB fallback failed:",(error as any)?.code||"TMDB_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");}
+  try{const movieCandidates=await tmdbFetch(cfg);pool=await youtubeValidateCandidates(movieCandidates,cfg);}catch(error){console.error("[trending] movie/trailer discovery failed:",(error as any)?.code||"TRENDING_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");}
+  if(!pool.length){
+    try{pool=await youtubeFetch(cfg);}catch(error){console.error("[trending] YouTube discovery fallback failed:",(error as any)?.code||"YOUTUBE_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");}
   }
-  if(!pool.length)throw new Error("Trending movie trailers are temporarily unavailable. Please try again.");
+  if(!pool.length)throw providerError("NO_VALID_TRAILER","No valid movie trailers are available right now.");
   return pool;
 }
 async function getPool(cfg:TrendingConfig,forceRefresh=false){
