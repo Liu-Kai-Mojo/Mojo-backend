@@ -178,9 +178,6 @@ async function youtubeValidateCandidates(candidates:TrendingVideo[],cfg:Trending
 async function fetchTrending(cfg:TrendingConfig){
   let pool:TrendingVideo[]=[];
   try{const movieCandidates=await tmdbFetch(cfg);pool=await youtubeValidateCandidates(movieCandidates,cfg);}catch(error){console.error("[trending] movie/trailer discovery failed:",(error as any)?.code||"TRENDING_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");}
-  if(!pool.length){
-    try{pool=await youtubeFetch(cfg);}catch(error){console.error("[trending] YouTube discovery fallback failed:",(error as any)?.code||"YOUTUBE_UNKNOWN_ERROR",error instanceof Error?error.message:"unknown");}
-  }
   if(!pool.length)throw providerError("NO_VALID_TRAILER","No valid movie trailers are available right now.");
   return pool;
 }
