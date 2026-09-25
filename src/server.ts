@@ -153,6 +153,7 @@ function taskPublic(t:any,includeValues=false){
     id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
     requiredWatchSeconds:t.requiredWatchSeconds??0,
+    movie:t.tmdbMovieId?{tmdbId:t.tmdbMovieId,title:t.movieTitle||"",posterUrl:t.moviePosterUrl||"",releaseDate:t.movieReleaseDate}:null,
     video:t.videoId?{
       provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||t.title,
       channelId:t.videoChannelId||"",channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||"",
@@ -218,7 +219,7 @@ app.post("/api/client/tasks/start",auth([Role.CLIENT]),asyncRoute(async(req,res)
     if(amount===null)return res.status(409).json({error:"Your balance is too low to start this task. Please add funds before continuing.",code:"LOW_BALANCE"});
     try{
       const video=await getTrendingVideoForClient(clientId);
-      const updated=await prisma.task.update({where:{id:task.id},data:{amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date(),requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"}});
+      const updated=await prisma.task.update({where:{id:task.id},data:{amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date(),requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),tmdbMovieId:video.tmdbMovieId??null,movieTitle:video.movieTitle??null,moviePosterUrl:video.moviePosterUrl??null,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"}});
       return res.json({task:taskPublic(updated,true)});
     }catch(error){const code=String((error as any)?.code||"TRENDING_VIDEO_UNAVAILABLE");console.error("[task-start]",code,error instanceof Error?error.message:error);return res.status(503).json({error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
   }
