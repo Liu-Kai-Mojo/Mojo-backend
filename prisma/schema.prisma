@@ -140,6 +140,11 @@ model Task {
   revealedAt     DateTime?
   completedAt    DateTime?
   videoProvider  String?
+  videoChannelId String?
+  videoViewCount Int?
+  videoLikeCount Int?
+  videoCommentCount Int?
+  videoLiveBroadcastContent String?
   videoId        String?
   videoTitle     String?
   videoChannelTitle String?
