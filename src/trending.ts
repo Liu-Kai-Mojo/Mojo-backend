@@ -79,10 +79,13 @@ function parseDuration(value:string){
   return m?Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0):0;
 }
 function clean(value:string){return value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();}
-function isLikelyTrailer(title:string,description:string){
+const INDIA_TITLE_EXCLUSIONS=/\b(bollywood|tollywood|kollywood|mollywood|tamil\s+(?:movie|film|trailer)|telugu\s+(?:movie|film|trailer)|malayalam\s+(?:movie|film|trailer)|kannada\s+(?:movie|film|trailer)|hindi\s+(?:movie|film|trailer)|bengali\s+(?:movie|film|trailer)|punjabi\s+(?:movie|film|trailer)|indian\s+(?:movie|film|cinema)|india\s+(?:trailer|movie|film))\b/i;
+const INDIA_CHANNEL_EXCLUSIONS=/\b(t-series|zee music|zee studios|sony music india|eros now|tips official|saregama|shemaroo|ultra movie parlour|hombale films|sun tv|sun nxt|geetha arts|mythri movie makers|dream warrior pictures|lyca productions|sri venkateswara creations|dharma productions|yash raj films)\b/i;
+function isLikelyTrailer(title:string,description:string,channelTitle=""){
   const text=(title+" "+description).toLowerCase();
   const positive=/\b(official\s+trailer|official\s+teaser(?:\s+trailer)?|final\s+trailer|new\s+trailer|movie\s+trailer|film\s+trailer|trailer|teaser)\b/.test(text);
   const negative=/\b(reaction|reacts|review|recap|explained|breakdown|fan\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\s+the\s+scenes|podcast|news|gameplay)\b/.test(text);
+  if(INDIA_TITLE_EXCLUSIONS.test(title+" "+description)||INDIA_CHANNEL_EXCLUSIONS.test(channelTitle))return false;
   return positive&&!negative;
 }
 function scoreVideo(v:TrendingVideo,cfg:TrendingConfig){
@@ -99,7 +102,7 @@ function scoreVideo(v:TrendingVideo,cfg:TrendingConfig){
 function rank(pool:TrendingVideo[],cfg:TrendingConfig){
   const map=new Map<string,TrendingVideo>();
   for(const v of pool){
-    if(!v.videoId||map.has(v.videoId)||!isLikelyTrailer(v.title,v.description))continue;
+    if(!v.videoId||map.has(v.videoId)||!isLikelyTrailer(v.title,v.description,v.channelTitle))continue;
     if(v.durationSeconds<cfg.minDurationSeconds)continue;
     if(cfg.maxDurationSeconds>0&&v.durationSeconds>cfg.maxDurationSeconds)continue;
     if(!v.thumbnailUrl||!v.publishedAt)continue;
@@ -150,7 +153,7 @@ async function discover(cfg:TrendingConfig){
     const published=String(snippet.publishedAt||"");
     if(!item.id||String(status.privacyStatus)!=="public"||status.embeddable!==true||!published)continue;
     if(cfg.freshnessDays&&Date.parse(published)<Date.now()-cfg.freshnessDays*86400000)continue;
-    if(!isLikelyTrailer(String(snippet.title||""),String(snippet.description||"")))continue;
+    if(!isLikelyTrailer(String(snippet.title||""),String(snippet.description||""),String(snippet.channelTitle||"")))continue;
     if(duration<cfg.minDurationSeconds||(cfg.maxDurationSeconds>0&&duration>cfg.maxDurationSeconds))continue;
     const thumb=String(snippet.thumbnails?.maxres?.url||snippet.thumbnails?.high?.url||snippet.thumbnails?.medium?.url||snippet.thumbnails?.default?.url||"");
     if(!thumb)continue;
