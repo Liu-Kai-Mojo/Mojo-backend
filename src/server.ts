@@ -131,38 +131,23 @@ async function ensureTaskBatch(clientId:string,assignedById?:string){
   await prisma.$transaction(async tx=>{for(let i=count+1;i<=30;i++){await tx.task.create({data:{id:await uniqueTaskId(),clientId,assignedById,sequence:i,title:i===2?"Lucky combination":"Daily task",amountCents:0,commissionCents:0,isLucky:i===2}});}});
 }
 async function fetchMovieFeed(){
-  const titles=["Resident Evil","Practical Magic 2","Spider-Man: Brand New Day","The Odyssey","Coyote vs. Acme","Runner","Daniel and the Fiery Furnace","The Transformers: The Movie","The Weight","Buddy","Insidious: Out of the Further","PAW Patrol: The Dino Movie","Toy Story 5","Moana","Obsession","Avengers: Secret Wars","Super Mario Galaxy Movie","The Hunger Games: Sunrise on the Reaping"];
-  const key=process.env.TMDB_API_KEY||process.env.TMDB_API||"";
-  const token=process.env.TMDB_API_READ_TOKEN||"";
-  const out:any[]=[];
-  for(const title of titles){
-    let hit:any=null;
-    let posterUrl="";
-    let trailerUrl="";
-    if(key||token){
-      try{
-        const base="https://api.themoviedb.org/3/search/movie?query="+encodeURIComponent(title)+"&include_adult=false&language=en-US&page=1";
-        const url=token?base:base+"&api_key="+encodeURIComponent(key);
-        const rr=await fetch(url,{headers:token?{Authorization:"Bearer "+token}:{"accept":"application/json"}});
-        const jj:any=await rr.json();
-        hit=jj.results?.[0]||null;
-        if(hit?.poster_path)posterUrl="https://image.tmdb.org/t/p/w780"+hit.poster_path;
-        if(hit?.id){
-          const detailBase="https://api.themoviedb.org/3/movie/"+hit.id+"/videos?language=en-US";
-          const detailUrl=token?detailBase:detailBase+"&api_key="+encodeURIComponent(key);
-          const vr=await fetch(detailUrl,{headers:token?{Authorization:"Bearer "+token}:{"accept":"application/json"}});
-          const vj:any=await vr.json();
-          const trailer=vj.results?.find((v:any)=>v.site==="YouTube"&&(v.type==="Trailer"||v.type==="Teaser")&&v.official!==false)||vj.results?.find((v:any)=>v.site==="YouTube");
-          if(trailer?.key)trailerUrl="https://www.youtube.com/embed/"+trailer.key+"?autoplay=1&rel=0&modestbranding=1";
-        }
-      }catch{}
-    }
-    const popularity=Number(hit?.popularity||10);
-    const priceCents=Math.max(500,Math.round(popularity*100));
-    out.push({title,tmdbId:hit?.id??null,posterUrl,priceCents,trailerUrl});
+  const token=process.env.TMDB_API_READ_TOKEN||"";const apiKey=process.env.TMDB_API_KEY||process.env.TMDB_API||"";
+  if(!token&&!apiKey)return [];
+  const headers=token?{Authorization:"Bearer "+token}:{accept:"application/json"};
+  const region=(process.env.TRENDING_REGION_CODE||"MM").toUpperCase();
+  const endpoints=[
+    "https://api.themoviedb.org/3/movie/now_playing?language=en-US&page=1&region="+encodeURIComponent(region),
+    "https://api.themoviedb.org/3/movie/upcoming?language=en-US&page=1&region="+encodeURIComponent(region),
+    "https://api.themoviedb.org/3/movie/popular?language=en-US&page=1&region="+encodeURIComponent(region)
+  ].map(url=>token?url:url+"&api_key="+encodeURIComponent(apiKey));
+  const results:any[]=[];
+  for(const url of endpoints){
+    try{const rr=await fetch(url,{headers,signal:AbortSignal.timeout(8000)});if(!rr.ok)continue;const data:any=await rr.json();for(const movie of Array.isArray(data.results)?data.results:[])results.push(movie);}catch{}
   }
-  return out;
+  const seen=new Set<number>();
+  return results.filter(movie=>{const id=Number(movie?.id);if(!id||seen.has(id))return false;seen.add(id);return Boolean(movie?.title);}).slice(0,30).map(movie=>({title:String(movie.title),tmdbId:Number(movie.id),posterUrl:movie.poster_path?"https://image.tmdb.org/t/p/w780"+movie.poster_path:"",priceCents:0,trailerUrl:""}));
 }
+
 function taskPublic(t:any,includeValues=false){
   return {
     id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
