@@ -183,3 +183,29 @@ model AuditLog {
   @@index([actorId, createdAt])
   @@index([targetId, createdAt])
 }
+
+model TrailerCache {
+  id                  String   @id @db.VarChar(5)
+  videoId             String   @unique
+  title               String
+  description         String
+  channelId           String
+  channelTitle        String
+  publishedAt         DateTime
+  thumbnailUrl        String
+  durationSeconds     Int
+  categoryId          String
+  viewCount           Int      @default(0)
+  likeCount           Int      @default(0)
+  commentCount        Int      @default(0)
+  embeddable          Boolean  @default(false)
+  privacyStatus       String
+  score               Float    @default(0)
+  lastValidatedAt     DateTime
+  lastSeenAt          DateTime
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([embeddable, privacyStatus, publishedAt])
+  @@index([score])
+}
