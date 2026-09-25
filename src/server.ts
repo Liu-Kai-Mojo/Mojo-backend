@@ -188,7 +188,7 @@ app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{co
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.task.findMany({where:{clientId:userId},orderBy:{sequence:"asc"}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),transactions:txs,messages});}));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
-app.post("/api/client/tasks/start",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const clientId=res.locals.auth.sub;
   await ensureTaskBatch(clientId);
   const task=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
@@ -202,13 +202,13 @@ app.post("/api/client/tasks/start",auth([Role.CLIENT]),asyncRoute(async(req,res)
       const video=await getTrendingVideoForClient(clientId);
       const updated=await prisma.task.update({where:{id:task.id},data:{amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date(),requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"}});
       return res.json({task:taskPublic(updated,true)});
-    }catch(error){const code=String((error as any)?.code||"TRENDING_VIDEO_UNAVAILABLE");console.error("[task-start]",code,error instanceof Error?error.message:error);return res.status(503).json({error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
+    }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
   }
   if(task.amountCents>availableBalanceCents)return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before continuing.",code:"LOW_BALANCE"});
   if(!task.videoId)return res.status(503).json({error:"We couldn't load a movie trailer right now. Please try again shortly.",code:"NO_VALID_TRAILER"});
   return res.json({task:taskPublic(task,true)});
 }));
-app.post(["/api/client/tasks/:id/reveal","/api/client/tasks/:id/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
   const [task,user]=await Promise.all([
     prisma.task.findFirst({where:{id,clientId}}),
