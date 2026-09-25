@@ -238,9 +238,10 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       const video=await getTrendingVideoForClient(clientId);
       updated=await prisma.task.update({where:{id},data:{
         amountCents:amount,commissionCents:defaultCommission(amount),revealedAt:new Date(),
-        videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelTitle:video.channelTitle,
+        videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
         videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
-        videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId
+        videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,
+        videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"
       }});
     }catch(error){
       const message=error instanceof Error?error.message:"Trending videos are temporarily unavailable.";
@@ -287,8 +288,8 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
   const result=await prisma.$transaction(async tx=>{
     const fresh=await tx.task.findUniqueOrThrow({where:{id}});
     if(fresh.status!==TaskStatus.PENDING)throw new Error("This task has already been completed.");
-    const before=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}});
-    const beforeAvailable=Math.max(0,before.balanceCents-(await tx.user.findUniqueOrThrow({where:{id:clientId},select:{frozenCents:true}})).frozenCents);
+    const before=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}});
+    const beforeAvailable=Math.max(0,before.balanceCents-(before.frozenCents??0));
     if(beforeAvailable<fresh.amountCents)throw new Error("Your available balance is not enough for this task. Please add funds before finishing it.");
     const user=await tx.user.update({where:{id:clientId},data:{balanceCents:{increment:fresh.commissionCents}}});
     const completed=await tx.task.update({where:{id},data:{status:TaskStatus.COMPLETED,completedAt:new Date(),rating:d.rating??fresh.rating}});
