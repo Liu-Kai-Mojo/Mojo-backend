@@ -269,9 +269,10 @@ app.post("/api/client/tasks/:id/video-retry",auth([Role.CLIENT]),asyncRoute(asyn
   try{
     const video=await getTrendingVideoForClient(clientId);
     const updated=await prisma.task.update({where:{id},data:{
-      videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelTitle:video.channelTitle,
+      videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
       videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
-      videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId
+      videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,
+      videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"
     }});
     res.json({task:taskPublic(updated,true)});
   }catch{return res.status(503).json({error:"This video isn't available right now. We're loading another one.",code:"TRENDING_VIDEO_UNAVAILABLE"});}
@@ -338,9 +339,9 @@ app.patch("/api/admin/trending-config",auth(staff),asyncRoute(async(req,res)=>{
     enabled:z.boolean().optional(),regionCode:z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),categoryId:z.string().trim().min(1).max(10).optional(),
     cacheTtlMinutes:z.coerce.number().int().min(1).max(1440).optional(),poolSize:z.coerce.number().int().min(5).max(50).optional(),
     recentHistorySize:z.coerce.number().int().min(1).max(50).optional(),minimumDurationSeconds:z.coerce.number().int().min(0).max(86400).optional(),
-    maximumDurationSeconds:z.coerce.number().int().min(0).max(86400).optional()
+    maximumDurationSeconds:z.coerce.number().int().min(0).max(86400).optional(),freshnessDays:z.coerce.number().int().min(0).max(3650).optional(),discoveryQueries:z.string().trim().max(2000).optional()
   }).parse(req.body||{});
-  const map:any={enabled:"trending_videos_enabled",regionCode:"trending_region_code",categoryId:"trending_category_id",cacheTtlMinutes:"trending_cache_ttl_minutes",poolSize:"trending_pool_size",recentHistorySize:"trending_recent_history_size",minimumDurationSeconds:"trending_min_duration_seconds",maximumDurationSeconds:"trending_max_duration_seconds"};
+  const map:any={enabled:"trending_videos_enabled",regionCode:"trending_region_code",categoryId:"trending_category_id",cacheTtlMinutes:"trending_cache_ttl_minutes",poolSize:"trending_pool_size",recentHistorySize:"trending_recent_history_size",minimumDurationSeconds:"trending_min_duration_seconds",maximumDurationSeconds:"trending_max_duration_seconds",freshnessDays:"trending_freshness_days",discoveryQueries:"trending_discovery_queries"};
   for(const [field,key] of Object.entries(map) as Array<[string,string]>){
     const value=(d as any)[field];
     if(value!==undefined)await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:String(value)},update:{value:String(value)}});
