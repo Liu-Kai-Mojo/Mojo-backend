@@ -10,6 +10,7 @@ import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } f
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId } from "./utils/codes.js";
 
 const app=express();
+app.set("trust proxy",1);
 const port=Number(process.env.PORT||8787);
 const isProduction=process.env.NODE_ENV==="production";
 const normalize=(v:string)=>v.trim().replace(/\/+$/g,"");
@@ -20,6 +21,33 @@ app.disable("x-powered-by");
 app.use((req,res,next)=>{res.setHeader("X-Content-Type-Options","nosniff");res.setHeader("X-Frame-Options","DENY");res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");res.setHeader("Permissions-Policy","camera=(), microphone=(), geolocation=()");if(isProduction)res.setHeader("Strict-Transport-Security","max-age=31536000; includeSubDomains");next();});
 app.use(cors({origin(origin,cb){if(!origin||origins.includes(normalize(origin)))return cb(null,true);return cb(new Error("Origin is not allowed by CORS."));},credentials:true,methods:["GET","POST","PATCH","DELETE","OPTIONS"],allowedHeaders:["Content-Type","Authorization"]}));
 app.use(express.json({limit:"2mb"}));
+
+// Lightweight in-process rate limiting. This intentionally protects only sensitive API classes;
+// normal authenticated reads remain unrestricted. For multi-replica deployments, an upstream
+// gateway/rate-limit service should be used as the shared enforcement layer.
+type RateBucket={count:number;resetAt:number};
+const rateBuckets=new Map<string,RateBucket>();
+const rateLimit=(name:string,limit:number,windowMs:number)=>(req:express.Request,res:express.Response,next:express.NextFunction)=>{
+  const key=name+":"+String(req.ip||req.socket.remoteAddress||"unknown");
+  const now=Date.now();
+  const current=rateBuckets.get(key);
+  if(!current||current.resetAt<=now){rateBuckets.set(key,{count:1,resetAt:now+windowMs});return next();}
+  current.count+=1;
+  if(current.count>limit){res.setHeader("Retry-After",Math.ceil((current.resetAt-now)/1000));return res.status(429).json({error:"Too many requests. Please try again later.",code:"RATE_LIMITED"});}
+  return next();
+};
+const cleanupRateBuckets=()=>{const now=Date.now();for(const [key,bucket] of rateBuckets){if(bucket.resetAt<=now)rateBuckets.delete(key);}};
+const rateCleanup=setInterval(cleanupRateBuckets,60_000);rateCleanup.unref();
+
+app.post("/api/auth/login",rateLimit("login",10,60_000));
+app.post("/api/auth/register",rateLimit("register",5,15*60_000));
+app.post("/api/client/messages",rateLimit("client-message",30,60_000));
+app.post("/api/admin/messages",rateLimit("admin-message",60,60_000));
+app.patch("/api/admin/messages",rateLimit("admin-message-status",60,60_000));
+app.patch("/api/admin/balances",rateLimit("admin-balance",60,60_000));
+app.post("/api/admin/balances",rateLimit("admin-balance",60,60_000));
+
+
 app.use((req,res,next)=>{if(req.path.startsWith("/api/"))res.setHeader("Cache-Control","no-store");next();});
 
 function detectIdentifier(v:string){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)?IdentifierType.EMAIL:IdentifierType.PHONE;}
@@ -116,7 +144,16 @@ app.post("/api/auth/register",asyncRoute(async(req,res)=>{
   await audit(undefined,user.id,"CLIENT_REGISTERED",{adminId:admin.id}); const token=issueToken({id:user.id,role:user.role});return res.status(201).json({token,user:safeUser(user),message:"Your account is ready. Your welcome balance has been added."});
 }));
 app.post("/api/auth/login",asyncRoute(async(req,res)=>{const d=loginSchema.parse(req.body);const identifier=d.identifier.trim().includes("@")?d.identifier.trim().toLowerCase():d.identifier.trim();const user=await prisma.user.findUnique({where:{identifier}});if(!user)return res.status(401).json({error:"We could not find an account with that email or phone number."});if(!user.active)return res.status(403).json({error:"This account is currently paused. Please contact the workspace owner."});if(!(await verifyPassword(d.password,user.passwordHash)))return res.status(401).json({error:"The password does not match this account."});const token=issueToken({id:user.id,role:user.role});return res.json({token,user:safeUser(user),message:"Welcome back."});}));
-app.get("/api/me",auth(),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)});}));
+app.get("/api/me",auth(),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)}));
+
+const SYSTEM_STATUS_KEY="system_status";
+async function readSystemEnabled(){const setting=await prisma.setting.findUnique({where:{key:SYSTEM_STATUS_KEY}});return setting?setting.value!=="false":true;}
+app.get("/api/system/status",auth([Role.OWNER,Role.ADMIN]),asyncRoute(async(_req,res)=>{res.json({enabled:await readSystemEnabled(),source:"backend"});}));
+app.patch("/api/system/status",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const d=z.object({enabled:z.boolean()}).parse(req.body);const setting=await prisma.setting.upsert({where:{key:SYSTEM_STATUS_KEY},create:{id:await uniqueSettingId(),key:SYSTEM_STATUS_KEY,value:String(d.enabled)},update:{value:String(d.enabled)}});await audit(res.locals.auth.sub,undefined,"SYSTEM_STATUS_CHANGED",{enabled:d.enabled});res.json({enabled:setting.value!=="false",source:"backend"});}));
+
+// A logical platform-off state never shuts down the process. Owner/Admin access remains available,
+// while Client business operations are paused until the Owner re-enables the platform.
+app.use((req,res,next)=>{if(!req.path.startsWith("/api/client/"))return next();const authState=res.locals.auth as {sub:string;role:Role}|undefined;if(!authState)return next();return readSystemEnabled().then(enabled=>enabled||authState.role!==Role.CLIENT?next():res.status(503).json({error:"The platform is temporarily unavailable. Please try again later.",code:"PLATFORM_OFF"})).catch(next);});
 
 app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const client=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub},select:{adminId:true}});
@@ -283,7 +320,13 @@ app.get("/api/owner/settings",auth([Role.OWNER]),asyncRoute(async(_req,res)=>res
 app.patch("/api/owner/settings/:key",auth([Role.OWNER]),asyncRoute(async(req,res)=>{const key=param(req,"key");const d=z.object({value:z.string().max(1000)}).parse(req.body);const setting=await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:d.value},update:{value:d.value}});res.json({setting});}));
 
 app.use((req,res)=>res.status(404).json({error:"Route not found.",path:req.path}));
-app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{if(err instanceof z.ZodError)return res.status(400).json({error:err.issues[0]?.message||"Please check the details."});if(err instanceof Error&&err.message==="Origin is not allowed by CORS.")return res.status(403).json({error:"This origin is not allowed to access the API."});console.error(err);return res.status(500).json({error:err instanceof Error?err.message:"Something went wrong. Please try again."});});
+app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{
+  if(err instanceof z.ZodError)return res.status(422).json({error:err.issues[0]?.message||"Please check the submitted details.",code:"VALIDATION_ERROR"});
+  if(err instanceof Error&&err.message==="Origin is not allowed by CORS.")return res.status(403).json({error:"This origin is not allowed to access the API.",code:"CORS_FORBIDDEN"});
+  console.error(err);
+  if(isProduction)return res.status(500).json({error:"An unexpected server error occurred.",code:"INTERNAL_ERROR"});
+  return res.status(500).json({error:err instanceof Error?err.message:"Something went wrong. Please try again.",code:"INTERNAL_ERROR"});
+});
 
 const server=app.listen(port,"0.0.0.0",()=>{console.log(`Box Office Mojo API listening on ${port}`);void runMigrationsUntilReady();});
 server.on("error",e=>{console.error(e);process.exitCode=1;});
