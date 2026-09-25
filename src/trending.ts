@@ -134,7 +134,7 @@ async function discover(cfg:TrendingConfig){
   const publishedAfter=new Date(Date.now()-cfg.freshnessDays*86400000).toISOString();
   const searchUrl=new URL("https://www.googleapis.com/youtube/v3/search");
   searchUrl.searchParams.set("part","snippet");searchUrl.searchParams.set("type","video");searchUrl.searchParams.set("videoEmbeddable","true");
-  searchUrl.searchParams.set("videoCategoryId","1");searchUrl.searchParams.set("order",order);searchUrl.searchParams.set("regionCode",cfg.regionCode);
+  searchUrl.searchParams.set("order",order);searchUrl.searchParams.set("regionCode",cfg.regionCode);
   searchUrl.searchParams.set("relevanceLanguage",cfg.relevanceLanguage);searchUrl.searchParams.set("maxResults",String(Math.min(50,cfg.maxCandidates)));
   searchUrl.searchParams.set("publishedAfter",publishedAfter);searchUrl.searchParams.set("q",query);searchUrl.searchParams.set("key",key);
   const search:any=await youtubeRequest(searchUrl,"YouTube trailer search");
