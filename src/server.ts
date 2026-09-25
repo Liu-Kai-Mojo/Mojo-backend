@@ -168,8 +168,9 @@ function taskPublic(t:any,includeValues=false){
     requiredWatchSeconds:t.requiredWatchSeconds??0,
     video:t.videoId?{
       provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||t.title,
-      channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||"",
-      durationSeconds:t.videoDurationSeconds??0,publishedAt:t.videoPublishedAt,categoryId:t.videoCategoryId||""
+      channelId:t.videoChannelId||"",channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||"",
+      durationSeconds:t.videoDurationSeconds??0,publishedAt:t.videoPublishedAt,categoryId:t.videoCategoryId||"",
+      viewCount:t.videoViewCount??0,likeCount:t.videoLikeCount??0,commentCount:t.videoCommentCount??0,liveBroadcastContent:t.videoLiveBroadcastContent||"none"
     }:null,
     ...(includeValues?{amountCents:t.amountCents,commissionCents:t.commissionCents}: {})
   };
