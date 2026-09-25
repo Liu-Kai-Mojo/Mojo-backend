@@ -84,12 +84,13 @@ async function ensureOwnerFromEnv(){
 function param(req:express.Request,k:string){const v=req.params[k];return Array.isArray(v)?v[0]||"":v||"";}
 function asyncRoute(fn:(req:express.Request,res:express.Response,next:express.NextFunction)=>unknown|Promise<unknown>):express.RequestHandler{return(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);}
 function money(c:number){return Math.max(0,Math.round(c));}
+function defaultTaskAmount(balanceCents:number){return Math.max(0,Math.min(balanceCents,100));}
 function defaultCommission(amount:number){return Math.max(1,Math.round(amount*.05));}
 async function taskPriceConfig(){
   const keys=["task_price_min_percent","task_price_max_percent","task_price_min_absolute_cents","task_price_max_absolute_cents","task_price_min_remaining_balance_cents"];
   const rows=await prisma.setting.findMany({where:{key:{in:keys}}});
   const values=new Map(rows.map(r=>[r.key,Number(r.value)]));
-  const num=(key:string,fallback:number)=>{const db=values.get(key);const envKey=key.toUpperCase();const env=Number(process.env[envKey]);return Number.isFinite(db)?db:Number.isFinite(env)?env:fallback;};
+  const num=(key:string,fallback:number)=>{const db=values.get(key);const envKey=key.toUpperCase();const env=Number(process.env[envKey]);return Number.isFinite(db??NaN)?Number(db):Number.isFinite(env)?env:fallback;};
   return {
     minPercent:Math.max(0,num("task_price_min_percent",1)),
     maxPercent:Math.max(0,num("task_price_max_percent",10)),
