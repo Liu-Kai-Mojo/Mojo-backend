@@ -144,7 +144,7 @@ app.post("/api/auth/register",asyncRoute(async(req,res)=>{
   await audit(undefined,user.id,"CLIENT_REGISTERED",{adminId:admin.id}); const token=issueToken({id:user.id,role:user.role});return res.status(201).json({token,user:safeUser(user),message:"Your account is ready. Your welcome balance has been added."});
 }));
 app.post("/api/auth/login",asyncRoute(async(req,res)=>{const d=loginSchema.parse(req.body);const identifier=d.identifier.trim().includes("@")?d.identifier.trim().toLowerCase():d.identifier.trim();const user=await prisma.user.findUnique({where:{identifier}});if(!user)return res.status(401).json({error:"We could not find an account with that email or phone number."});if(!user.active)return res.status(403).json({error:"This account is currently paused. Please contact the workspace owner."});if(!(await verifyPassword(d.password,user.passwordHash)))return res.status(401).json({error:"The password does not match this account."});const token=issueToken({id:user.id,role:user.role});return res.json({token,user:safeUser(user),message:"Welcome back."});}));
-app.get("/api/me",auth(),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)}));
+app.get("/api/me",auth(),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)});}));
 
 const SYSTEM_STATUS_KEY="system_status";
 async function readSystemEnabled(){const setting=await prisma.setting.findUnique({where:{key:SYSTEM_STATUS_KEY}});return setting?setting.value!=="false":true;}
@@ -153,7 +153,8 @@ app.patch("/api/system/status",auth([Role.OWNER]),asyncRoute(async(req,res)=>{co
 
 // A logical platform-off state never shuts down the process. Owner/Admin access remains available,
 // while Client business operations are paused until the Owner re-enables the platform.
-app.use((req,res,next)=>{if(!req.path.startsWith("/api/client/"))return next();const authState=res.locals.auth as {sub:string;role:Role}|undefined;if(!authState)return next();return readSystemEnabled().then(enabled=>enabled||authState.role!==Role.CLIENT?next():res.status(503).json({error:"The platform is temporarily unavailable. Please try again later.",code:"PLATFORM_OFF"})).catch(next);});
+const platformGuard:express.RequestHandler=async(_req,res,next)=>{try{if(await readSystemEnabled())return next();return res.status(503).json({error:"The platform is temporarily unavailable. Please try again later.",code:"PLATFORM_OFF"});}catch(error){return next(error);}};
+const clientAuth=()=>[auth([Role.CLIENT]),platformGuard] as express.RequestHandler[];
 
 app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const client=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub},select:{adminId:true}});
