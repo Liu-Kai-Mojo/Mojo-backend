@@ -207,7 +207,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
     if(result.count===0){const claimed=await prisma.task.findFirstOrThrow({where:{id:task.id,status:TaskStatus.PENDING}});return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(claimed,true)});}
     const updated=await prisma.task.findUniqueOrThrow({where:{id:task.id}});return res.json({success:true,task:taskPublic(updated,true)});
   }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
-});
+}));
 app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
   const [task,user]=await Promise.all([
