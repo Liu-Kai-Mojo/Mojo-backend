@@ -1,0 +1,3 @@
+ALTER TABLE "Task" ALTER COLUMN "requiredWatchSeconds" TYPE DOUBLE PRECISION USING "requiredWatchSeconds"::double precision, ALTER COLUMN "requiredWatchSeconds" SET DEFAULT 2.5;
+ALTER TABLE "Task" ADD COLUMN "watchAccumulatedMs" INTEGER NOT NULL DEFAULT 0, ADD COLUMN "watchHeartbeatAt" TIMESTAMP(3), ADD COLUMN "idempotencyKey" TEXT;
+CREATE UNIQUE INDEX "Task_idempotencyKey_key" ON "Task"("idempotencyKey");
