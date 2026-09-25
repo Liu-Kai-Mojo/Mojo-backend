@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { execFile, type ChildProcess } from "node:child_process";
+import { randomInt } from "node:crypto";
 import { Role, IdentifierType, MessageStatus, TaskStatus } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "./prisma.js";
@@ -83,9 +84,45 @@ async function ensureOwnerFromEnv(){
 function param(req:express.Request,k:string){const v=req.params[k];return Array.isArray(v)?v[0]||"":v||"";}
 function asyncRoute(fn:(req:express.Request,res:express.Response,next:express.NextFunction)=>unknown|Promise<unknown>):express.RequestHandler{return(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);}
 function money(c:number){return Math.max(0,Math.round(c));}
-function defaultTaskAmount(balanceCents:number,sequence:number){const tiers=balanceCents<500?500:balanceCents<2000?1000:balanceCents<10000?2500:5000;return tiers+Math.min(sequence-1,4)*Math.round(tiers*.2);}
 function defaultCommission(amount:number){return Math.max(1,Math.round(amount*.05));}
-function randomTaskAmount(balanceCents:number,sequence:number){const minimum=5000;if(balanceCents<minimum)return minimum;const max=Math.max(minimum,Math.min(balanceCents,Math.max(minimum,Math.floor(balanceCents*(0.18+Math.random()*0.18)))));const step=Math.max(100,Math.round((max-minimum)/5));const choices=[minimum,minimum+step,minimum+step*2,minimum+step*3,max].filter(v=>v<=balanceCents);return choices[Math.floor(Math.random()*choices.length)]||minimum}
+async function taskPriceConfig(){
+  const keys=["task_price_min_percent","task_price_max_percent","task_price_min_absolute_cents","task_price_max_absolute_cents","task_price_min_remaining_balance_cents"];
+  const rows=await prisma.setting.findMany({where:{key:{in:keys}}});
+  const values=new Map(rows.map(r=>[r.key,Number(r.value)]));
+  const num=(key:string,fallback:number)=>{const n=values.get(key);return Number.isFinite(n)?n:fallback;};
+  return {
+    minPercent:Math.max(0,num("task_price_min_percent",1)),
+    maxPercent:Math.max(0,num("task_price_max_percent",10)),
+    minAbsoluteCents:Math.max(1,Math.round(num("task_price_min_absolute_cents",100))),
+    maxAbsoluteCents:Math.max(1,Math.round(num("task_price_max_absolute_cents",100000))),
+    minRemainingBalanceCents:Math.max(0,Math.round(num("task_price_min_remaining_balance_cents",0)))
+  };
+}
+function secureRandomCents(min:number,max:number){
+  if(max<=min)return min;
+  return min+randomInt(max-min+1);
+}
+async function randomTaskAmount(availableBalanceCents:number){
+  const cfg=await taskPriceConfig();
+  const safeMax=Math.min(
+    availableBalanceCents-cfg.minRemainingBalanceCents,
+    cfg.maxAbsoluteCents,
+    Math.floor(availableBalanceCents*cfg.maxPercent/100)
+  );
+  const safeMin=Math.max(cfg.minAbsoluteCents,Math.ceil(availableBalanceCents*cfg.minPercent/100));
+  if(safeMax<safeMin)return null;
+  return secureRandomCents(safeMin,safeMax);
+}
+async function upsertDefaultTaskPriceSettings(){
+  const defaults:{key:string;value:string}[]=[
+    {key:"task_price_min_percent",value:"1"},
+    {key:"task_price_max_percent",value:"10"},
+    {key:"task_price_min_absolute_cents",value:"100"},
+    {key:"task_price_max_absolute_cents",value:"100000"},
+    {key:"task_price_min_remaining_balance_cents",value:"0"}
+  ];
+  for(const item of defaults)await prisma.setting.upsert({where:{key:item.key},create:{id:await uniqueSettingId(),key:item.key,value:item.value},update:{}});
+}
 async function ensureTaskBatch(clientId:string,assignedById?:string){
   const count=await prisma.task.count({where:{clientId}});
   if(count>=30)return;
@@ -141,6 +178,7 @@ function staffWhere(role:Role,id:string){return role===Role.OWNER?{role:Role.CLI
 function canManageClient(role:Role,id:string,clientId:string){return prisma.user.findFirst({where:{id:clientId,role:Role.CLIENT,...(role===Role.ADMIN?{adminId:id}:{})}});}
 
 let applicationReady=false;let migrationProcess:ChildProcess|null=null;
+
 app.get("/",(_req,res)=>res.json({ok:true,service:"box-office-mojo-api",status:"alive",time:new Date().toISOString()}));
 app.get("/health",(_req,res)=>res.json({ok:true,service:"box-office-mojo-api",status:"alive",time:new Date().toISOString()}));
 app.get("/api/health",(_req,res)=>res.json({ok:true,service:"box-office-mojo-api",status:"alive",time:new Date().toISOString()}));
@@ -180,19 +218,21 @@ app.get("/api/client/movies/:id/videos",auth([Role.CLIENT]),asyncRoute(async(req
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.task.findMany({where:{clientId:userId},orderBy:{sequence:"asc"}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),transactions:txs,messages});}));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
+app.post("/api/client/tasks/:id/start",auth([Role.CLIENT]),asyncRoute(async(req,res,next)=>{req.url=req.url.replace("/start","/reveal");return next();}));
 app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
   const [task,user]=await Promise.all([
     prisma.task.findFirst({where:{id,clientId}}),
-    prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}})
+    prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}})
   ]);
+  const availableBalanceCents=Math.max(0,user.balanceCents-(user.frozenCents??0));
   if(!task)return res.status(404).json({error:"Task not found."});
   const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
   if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before opening another one."});
   let updated=task;
   if(!task.revealedAt){
-    const amount=randomTaskAmount(user.balanceCents,task.sequence);
-    if(user.balanceCents<amount)return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before starting the next task."});
+    const amount=await randomTaskAmount(availableBalanceCents);
+    if(amount===null)return res.status(409).json({error:"Your balance is too low to start this task. Please add funds before continuing."});
     try{
       const video=await getTrendingVideoForClient(clientId);
       updated=await prisma.task.update({where:{id},data:{
@@ -205,7 +245,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       const message=error instanceof Error?error.message:"Trending videos are temporarily unavailable.";
       return res.status(503).json({error:message,code:"TRENDING_VIDEO_UNAVAILABLE"});
     }
-  }else if(task.amountCents>user.balanceCents){
+  }else if(task.amountCents>availableBalanceCents){
     return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before continuing."});
   }else if(!task.videoId){
     try{
@@ -247,7 +287,8 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
     const fresh=await tx.task.findUniqueOrThrow({where:{id}});
     if(fresh.status!==TaskStatus.PENDING)throw new Error("This task has already been completed.");
     const before=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true}});
-    if(before.balanceCents<fresh.amountCents)throw new Error("Your available balance is not enough for this task. Please add funds before finishing it.");
+    const beforeAvailable=Math.max(0,before.balanceCents-(await tx.user.findUniqueOrThrow({where:{id:clientId},select:{frozenCents:true}})).frozenCents);
+    if(beforeAvailable<fresh.amountCents)throw new Error("Your available balance is not enough for this task. Please add funds before finishing it.");
     const user=await tx.user.update({where:{id:clientId},data:{balanceCents:{increment:fresh.commissionCents}}});
     const completed=await tx.task.update({where:{id},data:{status:TaskStatus.COMPLETED,completedAt:new Date(),rating:d.rating??fresh.rating}});
     await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:clientId,amountCents:fresh.commissionCents,type:"TASK_COMMISSION",note:`Task #${fresh.sequence} commission` }});
@@ -287,6 +328,8 @@ app.patch("/api/client/account/wallet",auth([Role.CLIENT]),asyncRoute(async(req,
 }));
 
 const staff=[Role.OWNER,Role.ADMIN];
+app.get("/api/admin/task-price-config",auth(staff),asyncRoute(async(_req,res)=>{const c=await taskPriceConfig();res.json({config:{minPercent:c.minPercent,maxPercent:c.maxPercent,minAbsoluteCents:c.minAbsoluteCents,maxAbsoluteCents:c.maxAbsoluteCents,minRemainingBalanceCents:c.minRemainingBalanceCents}});}));
+app.patch("/api/admin/task-price-config",auth(staff),asyncRoute(async(req,res)=>{const d=z.object({minPercent:z.coerce.number().min(0).max(100),maxPercent:z.coerce.number().min(0).max(100),minAbsoluteCents:z.coerce.number().int().min(1).max(100000000),maxAbsoluteCents:z.coerce.number().int().min(1).max(100000000),minRemainingBalanceCents:z.coerce.number().int().min(0).max(100000000)}).parse(req.body||{});if(d.maxPercent<d.minPercent||d.maxAbsoluteCents<d.minAbsoluteCents)return res.status(400).json({error:"Maximum price settings must be greater than or equal to minimum price settings."});const map:{field:keyof typeof d;key:string}[]=[{field:"minPercent",key:"task_price_min_percent"},{field:"maxPercent",key:"task_price_max_percent"},{field:"minAbsoluteCents",key:"task_price_min_absolute_cents"},{field:"maxAbsoluteCents",key:"task_price_max_absolute_cents"},{field:"minRemainingBalanceCents",key:"task_price_min_remaining_balance_cents"}];for(const item of map)await prisma.setting.upsert({where:{key:item.key},create:{id:await uniqueSettingId(),key:item.key,value:String(d[item.field])},update:{value:String(d[item.field])}});await audit(res.locals.auth.sub,undefined,"TASK_PRICE_CONFIG_UPDATED",{fields:Object.keys(d)});res.json({config:await taskPriceConfig(),message:"Task price settings saved."});}));
 app.get("/api/admin/trending-config",auth(staff),asyncRoute(async(_req,res)=>{res.json({config:await trendingConfig()});}));
 app.patch("/api/admin/trending-config",auth(staff),asyncRoute(async(req,res)=>{
   const d=z.object({
@@ -433,7 +476,8 @@ app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.Nex
 
 const server=app.listen(port,"0.0.0.0",()=>{console.log(`Box Office Mojo API listening on ${port}`);void runMigrationsUntilReady();});
 server.on("error",e=>{console.error(e);process.exitCode=1;});
-const trendingWarmup=setInterval(()=>{void warmTrendingVideoCache().catch(()=>{});},5*60_000);trendingWarmup.unref();
+const trendingWarmup=setInterval(()=>{void upsertDefaultTaskPriceSettings().catch(error=>console.error("[pricing-config]",error));
+void warmTrendingVideoCache().catch(()=>{});},5*60_000);trendingWarmup.unref();
 void warmTrendingVideoCache().catch(()=>{});
 
 function runMigrations(){return new Promise<void>((resolve,reject)=>{const args=["prisma","migrate","deploy","--schema=prisma/schema.prisma"];migrationProcess=execFile(process.platform==="win32"?(process.env.ComSpec||"cmd.exe"):"npx",process.platform==="win32"?["/d","/s","/c","npx "+args.join(" ")]:args,{cwd:process.cwd(),env:process.env,windowsHide:true},(error,stdout,stderr)=>{migrationProcess=null;if(stdout.trim())console.log(stdout.trim());if(stderr.trim())console.error(stderr.trim());error?reject(error):resolve();});});}
