@@ -94,7 +94,7 @@ async function taskPriceConfig(){
   return {
     minPercent:Math.max(0,num("task_price_min_percent",1)),
     maxPercent:Math.max(0,num("task_price_max_percent",10)),
-    minAbsoluteCents:Math.max(1,Math.round(num("task_price_min_absolute_cents",100))),
+    minAbsoluteCents:Math.max(1,Math.round(num("task_price_min_absolute_cents",1))),
     maxAbsoluteCents:Math.max(1,Math.round(num("task_price_max_absolute_cents",100000))),
     minRemainingBalanceCents:Math.max(0,Math.round(num("task_price_min_remaining_balance_cents",0)))
   };
@@ -118,7 +118,7 @@ async function upsertDefaultTaskPriceSettings(){
   const defaults:{key:string;value:string}[]=[
     {key:"task_price_min_percent",value:"1"},
     {key:"task_price_max_percent",value:"10"},
-    {key:"task_price_min_absolute_cents",value:"100"},
+    {key:"task_price_min_absolute_cents",value:"1"},
     {key:"task_price_max_absolute_cents",value:"100000"},
     {key:"task_price_min_remaining_balance_cents",value:"0"}
   ];
