@@ -147,7 +147,20 @@ async function discover(cfg:TrendingConfig){
   const searches=discoveryPairs.slice(0,Math.min(5,discoveryPairs.length));
   const publishedAfter=new Date(Date.now()-cfg.freshnessDays*86400000).toISOString();
   const searchUrl=new URL("https://www.googleapis.com/youtube/v3/search");
-  const searchResults=await Promise.all(searches.map(async pair=>{const url=new URL(searchUrl);url.searchParams.set("part","snippet");url.searchParams.set("type","video");url.searchParams.set("videoEmbeddable","true");url.searchParams.set("order",pair.order);if(cfg.regionCode)url.searchParams.set("regionCode",cfg.regionCode);url.searchParams.set("relevanceLanguage",cfg.relevanceLanguage);url.searchParams.set("maxResults",String(Math.min(25,Math.max(10,Math.ceil(cfg.maxCandidates/searches.length)))));url.searchParams.set("publishedAfter",publishedAfter);url.searchParams.set("q",pair.query.replace(/\b20\d{2}\b/g,String(year)));url.searchParams.set("key",key);return youtubeRequest(url,"YouTube trailer search")}));
+  const searchResults=await Promise.all(searches.map(async pair=>{
+    const url=new URL(searchUrl);
+    url.searchParams.set("part","snippet");
+    url.searchParams.set("type","video");
+    url.searchParams.set("videoEmbeddable","true");
+    url.searchParams.set("order",pair.order);
+    if(cfg.regionCode)url.searchParams.set("regionCode",cfg.regionCode);
+    url.searchParams.set("relevanceLanguage",cfg.relevanceLanguage);
+    url.searchParams.set("maxResults",String(Math.min(25,Math.max(10,Math.ceil(cfg.maxCandidates/searches.length)))));
+    url.searchParams.set("publishedAfter",publishedAfter);
+    url.searchParams.set("q",pair.query.replace(/\\b20\\d{2}\\b/g,String(year)));
+    url.searchParams.set("key",key);
+    return youtubeRequest(url,"YouTube trailer search");
+  }));
   const ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[])].slice(0,50);
   console.log("[trending] YouTube discovery",{operation:"search",queries:searches.map(x=>x.query),orders:searches.map(x=>x.order),region:cfg.regionCode||"GLOBAL",resultCount:ids.length});
   if(!ids.length)throw providerError("NO_VALID_TRAILER","YouTube returned no trailer candidates.");
