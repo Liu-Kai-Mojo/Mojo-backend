@@ -157,7 +157,7 @@ async function discover(cfg:TrendingConfig){
     "Paramount Pictures official movie trailer",
     "Lionsgate official movie trailer"
   ];
-  const queries=[...hollywoodFallbackQueries,...fallbackQueries,...configuredQueries]
+  const queries=[...configuredQueries,...fallbackQueries,...hollywoodFallbackQueries]
     .map(q=>q.replace(/\\b20\\d{2}\\b/g,String(new Date().getUTCFullYear())).trim())
     .filter((q,i,a)=>q&&a.indexOf(q)===i);
   const orders=cfg.discoveryOrders.length?cfg.discoveryOrders:["relevance"];
