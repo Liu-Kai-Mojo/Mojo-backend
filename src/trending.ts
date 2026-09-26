@@ -186,7 +186,7 @@ async function refresh(cfg:TrendingConfig){
 async function loadCache(cfg:TrendingConfig,allowStale=false){
   const cutoff=new Date(Date.now()-cfg.freshnessDays*86400000);
   const rows=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public",...(allowStale?{}:{publishedAt:{gte:cutoff},lastValidatedAt:{gte:cutoff}})},orderBy:{score:"desc"},take:cfg.poolSize});
-  return rows.map(fromCache);
+  return rows.filter(row=>isLikelyTrailer(row.title,row.description,row.channelTitle)).slice(0,cfg.poolSize).map(fromCache);
 }
 async function select(clientId:string,pool:TrendingVideo[],cfg:TrendingConfig){
   if(!pool.length)throw providerError("TRAILER_CACHE_EMPTY","No validated YouTube trailer is currently cached.");
