@@ -296,7 +296,10 @@ async function hydrateCacheFromTasks(){
 async function loadCache(cfg:TrendingConfig,allowStale=false){
   const cutoff=new Date(Date.now()-cfg.freshnessDays*86400000);
   const rows=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public",...(allowStale?{}:{lastValidatedAt:{gte:cutoff}})},orderBy:{score:"desc"},take:Math.max(cfg.poolSize,50)});
-  return rows.filter(row=>isLikelyTrailer(row.title,row.description,row.channelTitle)).slice(0,cfg.poolSize).map(fromCache);
+  // TrailerCache rows have already passed backend validation when discovered.
+  // Task-derived rows are also trusted because they were previously assigned by
+  // the same backend pipeline; do not re-run title heuristics on normalized titles.
+  return rows.slice(0,cfg.poolSize).map(fromCache);
 }
 async function recentVideoIds(clientId:string,cfg:TrendingConfig){
   const cutoff=new Date(Date.now()-cfg.repeatCooldownHours*3600000);
