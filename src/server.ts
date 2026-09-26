@@ -9,7 +9,7 @@ import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
-import { getTrendingVideoForClient, getCurrentTrailerCandidates, trendingConfig, warmTrendingVideoCache, runYouTubeDiagnostic, normalizeMovieTitle } from "./trending.js";
+import { getTrendingVideoForClient, getTrendingVideosForClient, getCurrentTrailerCandidates, trendingConfig, normalizeMovieTitle } from "./trending.js";
 
 const app=express();
 app.set("trust proxy",1);
@@ -278,8 +278,8 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
   const active=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
   if(active){const pending=await prisma.task.findFirst({where:{sessionId:active.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});if(pending)return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have an active task session. Please finish the current task first.",task:taskPublic(pending,true),sessionId:active.id});await prisma.taskSession.update({where:{id:active.id},data:{status:"COMPLETED"}});}
   if(idempotencyKey){const prior=await prisma.task.findFirst({where:{clientId,idempotencyKey}});if(prior)return res.json({success:true,task:taskPublic(prior,true),sessionId:prior.sessionId,idempotent:true});}
-  const config=await getTaskManagementConfig(clientId);const videos:any[]=[];
-  try{for(let i=0;i<config.taskCount;i++)videos.push(await getTrendingVideoForClient(clientId));}
+  const config=await getTaskManagementConfig(clientId);let videos:any[]=[];
+  try{videos=await getTrendingVideosForClient(clientId,config.taskCount);}
   catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your tasks right now. Please try again shortly.",code});}
   try{
     const result=await prisma.$transaction(async tx=>{
@@ -639,9 +639,7 @@ app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.Nex
 
 const server=app.listen(port,"0.0.0.0",()=>{console.log(`Box Office Mojo API listening on ${port}`);void runMigrationsUntilReady();});
 server.on("error",e=>{console.error(e);process.exitCode=1;});
-const trendingWarmup=setInterval(()=>{void upsertDefaultTaskPriceSettings().catch(error=>console.error("[pricing-config]",error));
-void runYouTubeDiagnostic().catch(()=>{}); void warmTrendingVideoCache().catch(()=>{});},5*60_000);trendingWarmup.unref();
-void runYouTubeDiagnostic().catch(()=>{}); void warmTrendingVideoCache().catch(()=>{});
+void upsertDefaultTaskPriceSettings().catch(error=>console.error("[pricing-config]",error));
 
 function runMigrations(){return new Promise<void>((resolve,reject)=>{const args=["prisma","migrate","deploy","--schema=prisma/schema.prisma"];migrationProcess=execFile(process.platform==="win32"?(process.env.ComSpec||"cmd.exe"):"npx",process.platform==="win32"?["/d","/s","/c","npx "+args.join(" ")]:args,{cwd:process.cwd(),env:process.env,windowsHide:true},(error,stdout,stderr)=>{migrationProcess=null;if(stdout.trim())console.log(stdout.trim());if(stderr.trim())console.error(stderr.trim());error?reject(error):resolve();});});}
 async function runMigrationsUntilReady(){let delay=2000;while(!applicationReady){try{await runMigrations();await prisma.$queryRaw`SELECT 1`;await ensureOwnerFromEnv();await upsertDefaultTaskPriceSettings();await upsertDefaultVipRules();applicationReady=true;console.log("Database ready.");}catch(e){console.error(`Database/migration startup failed; retrying in ${Math.ceil(delay/1000)}s`,e);await new Promise(r=>setTimeout(r,delay));delay=Math.min(delay*2,30000);}}}
