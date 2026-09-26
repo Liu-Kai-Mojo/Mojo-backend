@@ -455,7 +455,7 @@ app.get("/api/admin/clients",auth(staff),asyncRoute(async(_req,res)=>{
     return {...safeUser(client),taskManagement:{taskCount:session?.generatedTaskCount??config.taskCount,completedTasks:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,remainingTasks:tasks.filter(t=>t.status===TaskStatus.PENDING).length,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:session?.amountOverrideCents??config.amountCents,combinationTaskCount:session?.combinationTaskCount??config.combinationTaskCount,combinationTaskAmountCents:session?.combinationTaskAmountCents??config.combinationTaskAmountCents,sessionId:session?.id??null}};
   }));
   res.json({clients:rows});
-}));res.json({clients:rows});}));
+}));
 app.get("/api/admin/balances",auth([Role.ADMIN]),asyncRoute(async(_req,res)=>{
   const clients=await prisma.user.findMany({where:{role:Role.CLIENT,adminId:res.locals.auth.sub},orderBy:{createdAt:"desc"}});
   res.json({balances:clients.map(u=>({...safeUser(u),availableCents:Math.max(0,u.balanceCents-(u.frozenCents??0))}))});
