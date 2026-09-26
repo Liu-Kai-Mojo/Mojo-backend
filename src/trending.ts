@@ -59,7 +59,7 @@ async function config():Promise<TrendingConfig>{
   const rawOrders=(values[13]??env.TRENDING_DISCOVERY_ORDERS??"date|viewCount|relevance").split("|").map(v=>v.trim()).filter(v=>["date","viewCount","relevance"].includes(v));
   return {
     enabled:(values[0]??env.TRENDING_VIDEOS_ENABLED??"true").toLowerCase()!=="false",
-    regionCode:"",
+    regionCode:"GLOBAL",
     relevanceLanguage:(values[2]??env.YOUTUBE_RELEVANCE_LANGUAGE??"en").trim(),
     cacheTtlMs:numberSetting(values[3]??env.TRAILER_CACHE_TTL??env.TRENDING_CACHE_TTL_MINUTES,60)*60_000,
     poolSize:Math.max(10,Math.min(50,Math.floor(numberSetting(values[4]??env.TRENDING_POOL_SIZE,30,1)))),
@@ -89,10 +89,14 @@ function isLikelyTrailer(title:string,description:string,channelTitle=""){
   const titleText=title.toLowerCase();
   const channelText=channelTitle.toLowerCase();
   const positive=/\b(official\s+trailer|official\s+teaser(?:\s+trailer)?|final\s+trailer|new\s+trailer|movie\s+trailer|film\s+trailer|trailer|teaser)\b/.test(titleText);
-  const negativeTitle=/\b(reaction|reacts|review|recap|explained|breakdown|fan\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\s+the\s+scenes|podcast|news|gameplay)\b/.test(titleText);
-  const negativeChannel=/\b(reaction|review|recap|explained|breakdown|parody|spoof|shorts?|podcast|news|gameplay)\b/.test(channelText);
+  const negativeTitle=/\b(reaction|reacts|review|recap|explained|breakdown|fan\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\s+the\s+scenes|podcast|news|gameplay|song|lyric|ost)\b/.test(titleText);
+  const negativeChannel=/\b(reaction|review|recap|explained|breakdown|parody|spoof|shorts?|podcast|news|gameplay|music)\b/.test(channelText);
+  const regional=/\b(my[a-z]*anmar|burmese|bollywood|hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi|tollywood|kollywood|thai|korean|japanese|chinese|indonesian|filipino)\b/i;
+  const hollywoodChannel=/\b(warner\s+bros|warner\s+bros\.\s+pictures|universal\s+pictures|sony\s+pictures|columbia\s+pictures|paramount\s+pictures|20th\s+century\s+studios|lionsgate|a24|focus\s+features|disney|marvel\s+entertainment|dc|dc\s+studios|pixar|dreamworks|new\s+line\s+cinema|legendary|mgm|amazon\s+mgm|searchlight|blumhouse|netflix)\b/i.test(channelTitle);
+  const hollywoodTitle=/\b(warner\s+bros|universal\s+pictures|sony\s+pictures|paramount|20th\s+century|lionsgate|a24|marvel|dc\s+studios|pixar|dreamworks|new\s+line|legendary|mgm)\b/i.test(title);
   if(INDIA_TITLE_EXCLUSIONS.test(title+" "+description)||INDIA_CHANNEL_EXCLUSIONS.test(channelTitle))return false;
-  return positive&&!negativeTitle&&!negativeChannel;
+  if(regional.test(title+" "+channelTitle+" "+description))return false;
+  return positive&&!negativeTitle&&!negativeChannel&&(hollywoodChannel||hollywoodTitle||/\bhollywood\b/i.test(title+" "+description));
 }
 function scoreVideo(v:TrendingVideo,cfg:TrendingConfig){
   const text=(v.title+" "+v.description+" "+v.channelTitle).toLowerCase();
@@ -140,12 +144,15 @@ async function discover(cfg:TrendingConfig){
   // chosen query per refresh and only fall back when the first query returns
   // no usable candidates. Region is intentionally global (no regionCode).
   const configuredQueries=cfg.discoveryQueries.filter(Boolean);
-  const queries=(configuredQueries.length?configuredQueries:[
+  const fallbackQueries=[
     "Hollywood movie official trailer",
     "new Hollywood movie trailer",
     "upcoming Hollywood movie trailer",
     "popular Hollywood movie trailer"
-  ]).map(q=>q.replace(/\\b20\\d{2}\\b/g,String(new Date().getUTCFullYear())).trim());
+  ];
+  const queries=[...configuredQueries,...fallbackQueries]
+    .map(q=>q.replace(/\\b20\\d{2}\\b/g,String(new Date().getUTCFullYear())).trim())
+    .filter((q,i,a)=>q&&a.indexOf(q)===i);
   const orders=cfg.discoveryOrders.length?cfg.discoveryOrders:["relevance"];
   const searchUrl=new URL("https://www.googleapis.com/youtube/v3/search");
 
@@ -167,20 +174,26 @@ async function discover(cfg:TrendingConfig){
   const searchResults:any[]=[];
   let ids:string[]=[];
   let selectedQuery="";
-  for(let i=0;i<queries.length&&i<4;i++){
+  for(let i=0;i<queries.length&&i<3;i++){
     const query=queries[i];
-    const result=await collectSearch(query,orders[i%orders.length]);
-    searchResults.push(result);
-    ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)
-      ?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
-    console.log("[trending] YouTube discovery",{
-      operation:"search",
-      query,
-      order:"relevance",
-      region:"GLOBAL",
-      resultCount:ids.length
-    });
-    if(ids.length){selectedQuery=query;break;}
+    try{
+      const result=await collectSearch(query,orders[i%orders.length]);
+      searchResults.push(result);
+      ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)
+        ?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
+      selectedQuery=query;
+      console.log("[trending] YouTube discovery",{
+        operation:"search",
+        query,
+        order:"relevance",
+        region:"GLOBAL",
+        resultCount:ids.length
+      });
+      if(ids.length>=25)break;
+    }catch(error){
+      console.error("[trending] YouTube search query failed",query,(error as any)?.code||"UNKNOWN");
+      if(i===2)throw error;
+    }
   }
 
   if(!ids.length)throw providerError("NO_VALID_TRAILER","YouTube returned no movie trailer candidates.");
