@@ -73,6 +73,11 @@ model Movie {
   posterUrl   String
   backdropUrl String?
   published   Boolean        @default(true)
+  originalLanguage String       @default("en")
+  countries    String         @default("United States")
+  productionCompanies String  @default("")
+  distributor  String         @default("")
+  hollywoodEligible Boolean   @default(false)
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
@@ -238,7 +243,20 @@ model TrailerCache {
   lastSeenAt          DateTime
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
+  movieId             String?  @db.VarChar(5)
+  movieTitle          String?
+  moviePosterUrl      String?
+  movieReleaseDate    DateTime?
+  movieYear           Int?
+  movieGenre          String?
+  movieOriginalLanguage String?
+  movieCountries      String?
+  movieProductionCompanies String?
+  movieDistributor    String?
+  movieHollywoodEligible Boolean @default(false)
+  movie               Movie? @relation(fields:[movieId], references:[id], onDelete:SetNull)
 
   @@index([embeddable, privacyStatus, publishedAt])
   @@index([score])
+  @@index([movieId, movieHollywoodEligible])
 }
