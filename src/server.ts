@@ -641,7 +641,7 @@ const server=app.listen(port,"0.0.0.0",()=>{console.log(`Box Office Mojo API lis
 server.on("error",e=>{console.error(e);process.exitCode=1;});
 const trendingWarmup=setInterval(()=>{void upsertDefaultTaskPriceSettings().catch(error=>console.error("[pricing-config]",error));
 void runYouTubeDiagnostic().catch(()=>{}); void warmTrendingVideoCache().catch(()=>{});},5*60_000);trendingWarmup.unref();
-void warmTrendingVideoCache().catch(()=>{});
+void runYouTubeDiagnostic().catch(()=>{}); void warmTrendingVideoCache().catch(()=>{});
 
 function runMigrations(){return new Promise<void>((resolve,reject)=>{const args=["prisma","migrate","deploy","--schema=prisma/schema.prisma"];migrationProcess=execFile(process.platform==="win32"?(process.env.ComSpec||"cmd.exe"):"npx",process.platform==="win32"?["/d","/s","/c","npx "+args.join(" ")]:args,{cwd:process.cwd(),env:process.env,windowsHide:true},(error,stdout,stderr)=>{migrationProcess=null;if(stdout.trim())console.log(stdout.trim());if(stderr.trim())console.error(stderr.trim());error?reject(error):resolve();});});}
 async function runMigrationsUntilReady(){let delay=2000;while(!applicationReady){try{await runMigrations();await prisma.$queryRaw`SELECT 1`;await ensureOwnerFromEnv();await upsertDefaultTaskPriceSettings();await upsertDefaultVipRules();applicationReady=true;console.log("Database ready.");}catch(e){console.error(`Database/migration startup failed; retrying in ${Math.ceil(delay/1000)}s`,e);await new Promise(r=>setTimeout(r,delay));delay=Math.min(delay*2,30000);}}}
