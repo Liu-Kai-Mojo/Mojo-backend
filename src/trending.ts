@@ -161,7 +161,7 @@ async function discover(cfg:TrendingConfig){
     .map(q=>q.replace(/\\b20\\d{2}\\b/g,String(new Date().getUTCFullYear())).trim())
     .filter((q,i,a)=>q&&a.indexOf(q)===i);
   const orders=cfg.discoveryOrders.length?cfg.discoveryOrders:["relevance"];
-  const searchUrl=new URL("https://www.googleapis.com/youtube/v3/search");
+  const searchUrl=new URL("https://youtube.googleapis.com/youtube/v3/search");
 
   const collectSearch=async(query:string,order:string)=>{
     const url=new URL(searchUrl);
@@ -205,7 +205,7 @@ async function discover(cfg:TrendingConfig){
 
   if(!ids.length)throw providerError("NO_VALID_TRAILER","YouTube returned no movie trailer candidates.");
 
-  const detailUrl=new URL("https://www.googleapis.com/youtube/v3/videos");
+  const detailUrl=new URL("https://youtube.googleapis.com/youtube/v3/videos");
   detailUrl.searchParams.set("part","snippet,contentDetails,status,statistics");
   detailUrl.searchParams.set("id",ids.join(","));
   detailUrl.searchParams.set("key",key);
