@@ -264,7 +264,6 @@ export async function getTrendingVideosForClient(clientId:string,count:number){
 export async function getTrendingVideoForClient(clientId:string){return (await getTrendingVideosForClient(clientId,1))[0];}
 export async function getCurrentTrailerCandidates(){
   const cfg=await config();if(!cfg.enabled)return [];
-  await hydrateCacheFromTasks();
   return loadCache(cfg,true);
 }
 export async function runYouTubeDiagnostic(){return {skipped:true,reason:"manual-only diagnostic; production startup does not call search.list"};}
