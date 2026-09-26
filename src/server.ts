@@ -142,7 +142,7 @@ function taskPublic(t:any,includeValues=false){
       durationSeconds:t.videoDurationSeconds??0,publishedAt:t.videoPublishedAt,categoryId:t.videoCategoryId||"",
       viewCount:t.videoViewCount??0,likeCount:t.videoLikeCount??0,commentCount:t.videoCommentCount??0,liveBroadcastContent:t.videoLiveBroadcastContent||"none"
     }:null,
-    ...(includeValues?{amountCents:t.amountCents,commissionCents:t.commissionCents,priceCents:t.amountCents,commissionCentsValue:t.commissionCents}: {})
+    ...(includeValues?{amountCents:t.amountCents,commissionCents:t.commissionCents,movieTitle:t.videoTitle||t.title,trailerTitle:t.videoTitle||t.title,thumbnail:t.videoThumbnailUrl||"",channel:t.videoChannelTitle||"",publishedAt:t.videoPublishedAt||null,duration:t.videoDurationSeconds??0,price:t.amountCents,commission:t.commissionCents}: {})
   };
 }
 function staffWhere(role:Role,id:string){return role===Role.OWNER?{role:Role.CLIENT}:{role:Role.CLIENT,adminId:id};}
