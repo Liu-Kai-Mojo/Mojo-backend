@@ -191,13 +191,43 @@ async function writeCache(pool:TrendingVideo[]){
   for(const v of pool)await prisma.trailerCache.upsert({where:{videoId:v.videoId},create:{id:await uniqueSettingId(),videoId:v.videoId,title:v.title,description:v.description,channelId:v.channelId,channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,categoryId:v.categoryId,viewCount:v.viewCount,likeCount:v.likeCount,commentCount:v.commentCount,embeddable:true,privacyStatus:"public",score:v.score??0,lastValidatedAt:now,lastSeenAt:now,createdAt:now,updatedAt:now,movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:v.moviePosterUrl,movieReleaseDate:v.movieReleaseDate?new Date(v.movieReleaseDate):null,movieYear:v.movieYear,movieGenre:v.movieGenre,movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor,movieHollywoodEligible:true},update:{title:v.title,description:v.description,channelId:v.channelId,channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,categoryId:v.categoryId,viewCount:v.viewCount,likeCount:v.likeCount,commentCount:v.commentCount,embeddable:true,privacyStatus:"public",score:v.score??0,lastValidatedAt:now,lastSeenAt:now,movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:v.moviePosterUrl,movieReleaseDate:v.movieReleaseDate?new Date(v.movieReleaseDate):null,movieYear:v.movieYear,movieGenre:v.movieGenre,movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor,movieHollywoodEligible:true}});
 }
 function fromCache(row:any):TrendingVideo{return {provider:"youtube",videoId:row.videoId,title:row.title,description:row.description,channelId:row.channelId,channelTitle:row.channelTitle,thumbnailUrl:row.thumbnailUrl,durationSeconds:row.durationSeconds,publishedAt:row.publishedAt.toISOString(),categoryId:row.categoryId,viewCount:row.viewCount,likeCount:row.likeCount,commentCount:row.commentCount,liveBroadcastContent:"none",score:row.score,movieId:String(row.movieId),movieTitle:String(row.movieTitle),moviePosterUrl:String(row.moviePosterUrl),movieReleaseDate:row.movieReleaseDate?row.movieReleaseDate.toISOString():null,movieYear:Number(row.movieYear||0),movieGenre:String(row.movieGenre||""),movieOriginalLanguage:String(row.movieOriginalLanguage||""),movieCountries:String(row.movieCountries||""),movieProductionCompanies:String(row.movieProductionCompanies||""),movieDistributor:String(row.movieDistributor||"")};}
+async function fetchExternalOk(url:string,method:"GET"|"HEAD"="GET"){
+  try{
+    const response=await fetch(url,{method,signal:AbortSignal.timeout(5000),headers:method==="GET"?{Range:"bytes=0-1"}:undefined});
+    return response.ok;
+  }catch{return false;}
+}
+async function validateCachedVideo(row:any){
+  const videoId=String(row.videoId||"").trim();
+  const poster=String(row.moviePosterUrl||"").trim();
+  const thumbnail=String(row.thumbnailUrl||"").trim();
+  if(!videoId||!poster||!thumbnail)return {valid:false,reason:"MISSING_REQUIRED_METADATA"};
+  const [oembedOk,thumbnailOk,posterOk]=await Promise.all([
+    fetchExternalOk("https://www.youtube.com/oembed?url="+encodeURIComponent("https://www.youtube.com/watch?v="+videoId)+"&format=json"),
+    fetchExternalOk(thumbnail),
+    fetchExternalOk(poster)
+  ]);
+  if(!oembedOk)return {valid:false,reason:"VIDEO_UNAVAILABLE"};
+  if(!thumbnailOk)return {valid:false,reason:"THUMBNAIL_UNAVAILABLE"};
+  if(!posterOk)return {valid:false,reason:"POSTER_UNAVAILABLE"};
+  return {valid:true,reason:"OK"};
+}
 async function loadCache(cfg:TrendingConfig,allowStale=false){
   const cutoff=new Date(Date.now()-cfg.freshnessDays*86400000);
   const rows=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public",movieHollywoodEligible:true,movieId:{not:null},movieTitle:{not:null},moviePosterUrl:{not:null},...(allowStale?{}:{lastValidatedAt:{gte:cutoff}})},orderBy:{score:"desc"},take:Math.max(cfg.poolSize,50)});
-  // TrailerCache rows have already passed backend validation when discovered.
-  // Task-derived rows are also trusted because they were previously assigned by
-  // the same backend pipeline; do not re-run title heuristics on normalized titles.
-  return rows.slice(0,cfg.poolSize).map(fromCache);
+  const candidates=rows.slice(0,cfg.poolSize);
+  const checked=await Promise.all(candidates.map(async row=>{
+    const validation=await validateCachedVideo(row);
+    if(validation.valid){
+      await prisma.trailerCache.update({where:{videoId:row.videoId},data:{lastValidatedAt:new Date(),lastSeenAt:new Date()}});
+      return fromCache(row);
+    }
+    console.warn("[trending] stale cache rejected",{operation:"cache-validation",videoId:String(row.videoId),movieId:String(row.movieId||""),movieTitle:String(row.movieTitle||""),reason:validation.reason});
+    await prisma.trailerCache.update({where:{videoId:row.videoId},data:{lastValidatedAt:new Date(0),lastSeenAt:new Date()}}).catch(()=>{});
+    return null;
+  }));
+  const valid=checked.filter((value):value is TrendingVideo=>Boolean(value));
+  return valid;
 }
 async function recentVideoIds(clientId:string,cfg:TrendingConfig){
   const cutoff=new Date(Date.now()-cfg.repeatCooldownHours*3600000);
