@@ -81,6 +81,8 @@ function parseDuration(value:string){
 function clean(value:string){return value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();}
 const DEFAULT_INDIA_TITLE_EXCLUSIONS="bollywood|tollywood|kollywood|mollywood|tamil\\s+(?:movie|film|trailer)|telugu\\s+(?:movie|film|trailer)|malayalam\\s+(?:movie|film|trailer)|kannada\\s+(?:movie|film|trailer)|hindi\\s+(?:movie|film|trailer)|bengali\\s+(?:movie|film|trailer)|punjabi\\s+(?:movie|film|trailer)|indian\\s+(?:movie|film|cinema)|india\\s+(?:trailer|movie|film)";
 const DEFAULT_INDIA_CHANNEL_EXCLUSIONS="t-series|zee music|zee studios|sony music india|eros now|tips official|saregama|shemaroo|ultra movie parlour|hombale films|sun tv|sun nxt|geetha arts|mythri movie makers|dream warrior pictures|lyca productions|sri venkateswara creations|dharma productions|yash raj films";
+const DEFAULT_HOLLYWOOD_CHANNELS="warner bros\\.? pictures|warner bros\\.?|universal pictures|paramount pictures|sony pictures entertainment|sony pictures|columbia pictures|20th century studios|20th century fox|lionsgate movies|lionsgate|mgm|amazon mgm studios|amazon studios|netflix|walt disney studios|disney|pixar|marvel entertainment|marvel|lucasfilm|searchlight pictures|focus features|a24";
+const HOLLYWOOD_CHANNELS=new RegExp(process.env.HOLLYWOOD_CHANNEL_ALLOWLIST||DEFAULT_HOLLYWOOD_CHANNELS,"i");
 const INDIA_TITLE_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_TITLE_EXCLUSIONS||DEFAULT_INDIA_TITLE_EXCLUSIONS,"i");
 const INDIA_CHANNEL_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_CHANNEL_EXCLUSIONS||DEFAULT_INDIA_CHANNEL_EXCLUSIONS,"i");
 function isLikelyTrailer(title:string,description:string,channelTitle=""){
@@ -88,6 +90,7 @@ function isLikelyTrailer(title:string,description:string,channelTitle=""){
   const positive=/\b(official\s+trailer|official\s+teaser(?:\s+trailer)?|final\s+trailer|new\s+trailer|movie\s+trailer|film\s+trailer|trailer|teaser)\b/.test(text);
   const negative=/\b(reaction|reacts|review|recap|explained|breakdown|fan\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\s+the\s+scenes|podcast|news|gameplay)\b/.test(text);
   if(INDIA_TITLE_EXCLUSIONS.test(title+" "+description)||INDIA_CHANNEL_EXCLUSIONS.test(channelTitle))return false;
+  if(!HOLLYWOOD_CHANNELS.test(channelTitle))return false;
   return positive&&!negative;
 }
 function scoreVideo(v:TrendingVideo,cfg:TrendingConfig){
