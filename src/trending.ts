@@ -150,7 +150,14 @@ async function discover(cfg:TrendingConfig){
     "upcoming Hollywood movie trailer",
     "popular Hollywood movie trailer"
   ];
-  const queries=[...configuredQueries,...fallbackQueries]
+  const hollywoodFallbackQueries=[
+    "Warner Bros Pictures official movie trailer",
+    "Universal Pictures official movie trailer",
+    "Sony Pictures official movie trailer",
+    "Paramount Pictures official movie trailer",
+    "Lionsgate official movie trailer"
+  ];
+  const queries=[...hollywoodFallbackQueries,...fallbackQueries,...configuredQueries]
     .map(q=>q.replace(/\\b20\\d{2}\\b/g,String(new Date().getUTCFullYear())).trim())
     .filter((q,i,a)=>q&&a.indexOf(q)===i);
   const orders=cfg.discoveryOrders.length?cfg.discoveryOrders:["relevance"];
