@@ -57,6 +57,7 @@ model User {
   walletTransactions    WalletTransaction[]
   tasks                 Task[]              @relation("ClientTasks")
   taskAssignments       Task[]              @relation("TaskAssignedBy")
+  taskSessions          TaskSession[]
 
   @@index([adminId])
 }
@@ -127,9 +128,36 @@ model WalletTransaction {
   @@index([userId, createdAt])
 }
 
+model TaskSession {
+  id                       String   @id @db.VarChar(5)
+  clientId                 String   @db.VarChar(5)
+  vipLevel                 String
+  balanceSnapshotCents     Int
+  generatedTaskCount       Int
+  status                   String   @default("ACTIVE")
+  totalTaskAmountCents     Int      @default(0)
+  totalExpectedCommissionCents Int  @default(0)
+  completedTaskCount       Int      @default(0)
+  resetNumber              Int      @default(0)
+  taskCountOverride        Int?
+  amountOverrideCents      Int?
+  combinationTaskCount     Int      @default(0)
+  combinationTaskAmountCents Int     @default(0)
+  combinationCommissionRateBps Int   @default(1500)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  client User @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tasks Task[]
+  @@index([clientId, createdAt])
+  @@index([clientId, status])
+}
+
 model Task {
   id             String     @id @db.VarChar(5)
   clientId       String     @db.VarChar(5)
+  sessionId      String?    @db.VarChar(5)
+  taskType       String     @default("STANDARD")
+  commissionRateBps Int     @default(0)
   assignedById   String?    @db.VarChar(5)
   sequence       Int
   title          String
@@ -164,9 +192,11 @@ model Task {
   updatedAt      DateTime   @updatedAt
 
   client         User       @relation("ClientTasks", fields: [clientId], references: [id], onDelete: Cascade)
+  session        TaskSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   assignedBy     User?      @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
 
   @@unique([clientId, sequence])
+  @@index([sessionId, sequence])
   @@index([clientId, status, sequence])
 }
 
