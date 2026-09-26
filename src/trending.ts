@@ -79,7 +79,7 @@ function parseDuration(value:string){
   return m?Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0):0;
 }
 function clean(value:string){return value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();}
-function movieTitle(value:string){const raw=clean(value).replace(/\s+/g," ");if(!raw)return "Movie";return raw.replace(/\s*[|–—:-]\s*(?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+|movie\s+)*(?:official\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?$/i,"").replace(/\s*\((?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?\)$/i,"").replace(/\s+\b(?:official|new|latest|exclusive|final)\s+(?:trailer|teaser)\b.*$/i,"").replace(/\s*[-–—|]+\s*$/,"").trim()||raw;}
+export function normalizeMovieTitle(value:string){const raw=clean(value).replace(/\s+/g," ");if(!raw)return "Movie";return raw.replace(/\s*[|–—:-]\s*(?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+|movie\s+)*(?:official\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?$/i,"").replace(/\s*\((?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?\)$/i,"").replace(/\s+\b(?:official|new|latest|exclusive|final)\s+(?:trailer|teaser)\b.*$/i,"").replace(/\s*[-–—|]+\s*$/,"").trim()||raw;}
 const DEFAULT_INDIA_TITLE_EXCLUSIONS="";
 const DEFAULT_INDIA_CHANNEL_EXCLUSIONS="";
 
@@ -233,7 +233,7 @@ async function discover(cfg:TrendingConfig){
       snippet.thumbnails?.default?.url||""
     );
     if(!thumb)continue;
-    const cleanTitle=movieTitle(rawTitle);
+    const cleanTitle=normalizeMovieTitle(rawTitle);
     if(!cleanTitle||cleanTitle==="Movie")continue;
     candidates.push({
       provider:"youtube",
@@ -270,7 +270,7 @@ async function writeCache(pool:TrendingVideo[],cfg:TrendingConfig){
     await prisma.trailerCache.upsert({where:{videoId:v.videoId},create:{id:await uniqueSettingId(),videoId:v.videoId,title:v.title,description:v.description,channelId:v.channelId,channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,categoryId:v.categoryId,viewCount:v.viewCount,likeCount:v.likeCount,commentCount:v.commentCount,embeddable:true,privacyStatus:"public",score:v.score??0,lastValidatedAt:now,lastSeenAt:now},update:{title:v.title,description:v.description,channelId:v.channelId,channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,categoryId:v.categoryId,viewCount:v.viewCount,likeCount:v.likeCount,commentCount:v.commentCount,embeddable:true,privacyStatus:"public",score:v.score??0,lastValidatedAt:now,lastSeenAt:now}});
   }
 }
-function fromCache(row:any):TrendingVideo{return {provider:"youtube",videoId:row.videoId,title:movieTitle(row.title),description:row.description,channelId:row.channelId,channelTitle:row.channelTitle,thumbnailUrl:row.thumbnailUrl,durationSeconds:row.durationSeconds,publishedAt:row.publishedAt.toISOString(),categoryId:row.categoryId,viewCount:row.viewCount,likeCount:row.likeCount,commentCount:row.commentCount,liveBroadcastContent:"none",score:row.score};}
+function fromCache(row:any):TrendingVideo{return {provider:"youtube",videoId:row.videoId,title:normalizeMovieTitle(row.title),description:row.description,channelId:row.channelId,channelTitle:row.channelTitle,thumbnailUrl:row.thumbnailUrl,durationSeconds:row.durationSeconds,publishedAt:row.publishedAt.toISOString(),categoryId:row.categoryId,viewCount:row.viewCount,likeCount:row.likeCount,commentCount:row.commentCount,liveBroadcastContent:"none",score:row.score};}
 async function refresh(cfg:TrendingConfig){
   const running=refreshState.get(cacheKey);if(running)return running;
   const promise=discover(cfg).then(async pool=>{await writeCache(pool,cfg);return pool;}).finally(()=>refreshState.delete(cacheKey));
