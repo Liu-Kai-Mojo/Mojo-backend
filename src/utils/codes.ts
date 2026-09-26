@@ -12,3 +12,5 @@ export const uniqueWalletTransactionId=()=>uniqueCode(id=>prisma.walletTransacti
 export const uniqueTaskId=()=>uniqueCode(id=>prisma.task.findUnique({where:{id}}));
 export const uniqueInviteCode=()=>uniqueCode(code=>prisma.user.findUnique({where:{inviteCode:code}}));
 export const uniqueAuditLogId=()=>uniqueCode(id=>prisma.auditLog.findUnique({where:{id}}));
+
+export const uniqueTaskSessionId=()=>uniqueCode(id=>prisma.taskSession.findUnique({where:{id}}));
