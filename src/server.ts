@@ -520,7 +520,7 @@ app.get("/api/admin/clients/:id/tasks",auth(staff),asyncRoute(async(req,res)=>{
 app.post("/api/admin/clients/:id/tasks",auth(staff),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const c=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!c)return res.status(404).json({error:"Client not found."});
   const d=taskSchema.parse(req.body);const amount=d.amountCents??defaultTaskAmount(c.balanceCents,d.sequence);const commission=d.commissionCents??(d.commissionRateBps!==undefined?Math.round(amount*d.commissionRateBps/10000):defaultCommission(amount,Math.max(0,c.balanceCents-(c.frozenCents??0))));
-  const existing=await prisma.task.findUnique({where:{clientId_sequence:{clientId:id,sequence:d.sequence}}});
+  const existing=await prisma.task.findFirst({where:{clientId:id,sequence:d.sequence,sessionId:null},orderBy:{createdAt:"desc"}});
   const task=existing?await prisma.task.update({where:{id:existing.id},data:{title:d.title??existing.title,amountCents:amount,commissionCents:commission,isLucky:d.isLucky??existing.isLucky,assignedById:res.locals.auth.sub,status:TaskStatus.PENDING,revealedAt:null,completedAt:null}}):await prisma.task.create({data:{id:await uniqueTaskId(),clientId:id,assignedById:res.locals.auth.sub,sequence:d.sequence,title:d.title??(d.isLucky?"Lucky combination":"Daily task"),amountCents:amount,commissionCents:commission,isLucky:d.isLucky??false}});
   res.json({task:taskPublic(task,true),message:"Task saved for this client."});
 }));
