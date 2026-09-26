@@ -116,6 +116,59 @@ function rank(pool:TrendingVideo[],cfg:TrendingConfig){
   }
   return [...map.values()].sort((a,b)=>(b.score??0)-(a.score??0)).slice(0,cfg.poolSize);
 }
+async function tmdbRequest(path:string,operation:string){
+  const token=String(process.env.TMDB_API_READ_TOKEN||"").trim();
+  if(!token)throw providerError("TMDB_NOT_CONFIGURED","TMDB_API_READ_TOKEN is not configured on the backend.");
+  let response:Response;
+  try{
+    response=await fetch("https://api.themoviedb.org/3"+path,{headers:{Authorization:"Bearer "+token,Accept:"application/json"},signal:AbortSignal.timeout(9000)});
+  }catch(error){
+    if(error instanceof Error&&error.name==="TimeoutError")throw providerError("TMDB_TIMEOUT",operation+" timed out.");
+    throw providerError("TMDB_SERVICE_UNAVAILABLE",operation+" could not be reached.");
+  }
+  if(!response.ok){
+    if(response.status===401||response.status===403)throw providerError("TMDB_AUTH_ERROR","TMDB authentication failed.");
+    if(response.status===429)throw providerError("TMDB_RATE_LIMIT","TMDB rate limit was reached.");
+    if(response.status>=500)throw providerError("TMDB_SERVICE_UNAVAILABLE","TMDB is temporarily unavailable.");
+    throw providerError("TMDB_UNKNOWN_ERROR","TMDB returned an unexpected response.");
+  }
+  return response.json() as Promise<any>;
+}
+async function discoverFromTmdb(cfg:TrendingConfig){
+  const data:any=await tmdbRequest("/trending/movie/week?language=en-US","TMDB movie discovery");
+  const movies=Array.isArray(data?.results)?data.results.filter((m:any)=>m?.id).slice(0,12):[];
+  const candidates:TrendingVideo[]=[];
+  for(const movie of movies){
+    try{
+      const details:any=await tmdbRequest("/movie/"+encodeURIComponent(String(movie.id))+"/videos?language=en-US","TMDB movie video discovery");
+      const videos=Array.isArray(details?.results)?details.results:[];
+      const video=videos.find((v:any)=>v?.site==="YouTube"&&v?.key&&/trailer|teaser/i.test(String(v?.type||""))&&String(v?.official)!=="false")
+        ||videos.find((v:any)=>v?.site==="YouTube"&&v?.key&&/trailer|teaser/i.test(String(v?.type||"")));
+      if(!video)continue;
+      const published=String(video.published_at||movie.release_date||new Date().toISOString());
+      const title=movieTitle(String(movie.title||video.name||"Movie"));
+      const posterPath=String(movie.poster_path||"");
+      const thumb=posterPath?"https://image.tmdb.org/t/p/w780"+posterPath:"https://i.ytimg.com/vi/"+encodeURIComponent(String(video.key))+"/hqdefault.jpg";
+      candidates.push({
+        provider:"youtube",
+        videoId:String(video.key),
+        title,
+        description:String(movie.overview||video.name||""),
+        channelId:"",
+        channelTitle:String(video.name||"Official trailer"),
+        thumbnailUrl:thumb,
+        durationSeconds:180,
+        publishedAt:published,
+        categoryId:"movie",
+        viewCount:0,
+        likeCount:0,
+        commentCount:0,
+        liveBroadcastContent:"none"
+      });
+    }catch(error){console.warn("[trending] TMDB movie video lookup failed",String(movie.id),(error as any)?.code||"UNKNOWN");}
+  }
+  return rank(candidates,cfg);
+}
 async function youtubeRequest(url:URL,operation:string){
   let response:Response;
   try{response=await fetch(url,{signal:AbortSignal.timeout(9000)});}
@@ -252,6 +305,10 @@ export async function getTrendingVideoForClient(clientId:string){
   catch(error){
     const stale=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public"},orderBy:{score:"desc"},take:cfg.poolSize});
     const validatedStale=stale.filter(row=>isLikelyTrailer(row.title,row.description,row.channelTitle));if(validatedStale.length)return select(clientId,validatedStale.map(fromCache),cfg);
+    try{
+      const tmdbPool=await discoverFromTmdb(cfg);
+      if(tmdbPool.length){await writeCache(tmdbPool,cfg);return select(clientId,tmdbPool,cfg);}
+    }catch(fallbackError){console.error("[trending] TMDB fallback failed",(fallbackError as any)?.code||"UNKNOWN");}
     throw error;
   }
 }
@@ -261,7 +318,13 @@ export async function getCurrentTrailerCandidates(){
   if(pool.length)return pool;
   const stale=await loadCache(cfg,true);
   if(stale.length){void refresh(cfg).catch(()=>{});return stale;}
-  try{return await refresh(cfg);}catch{return [];}
+  try{return await refresh(cfg);}catch{
+    try{
+      const tmdbPool=await discoverFromTmdb(cfg);
+      if(tmdbPool.length){await writeCache(tmdbPool,cfg);return tmdbPool;}
+    }catch(error){console.error("[trending] TMDB candidate fallback failed",(error as any)?.code||"UNKNOWN");}
+    return [];
+  }
 }
 export async function warmTrendingVideoCache(){
   const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0};
