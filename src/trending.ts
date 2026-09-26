@@ -269,10 +269,9 @@ export async function getCurrentTrailerCandidates(){
 export async function runYouTubeDiagnostic(){return {skipped:true,reason:"manual-only diagnostic; production startup does not call search.list"};}
 export async function warmTrendingVideoCache(){
   const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0};
-  const hydrated=await hydrateCacheFromTasks();
   const pool=await loadCache(cfg,true);
-  console.log("[trending] cache warmup",{count:pool.length,hydrated});
-  return {enabled:true,count:pool.length,hydrated};
+  console.log("[trending] cache warmup",{count:pool.length});
+  return {enabled:true,count:pool.length};
 }
 export async function trendingConfig(){
   const cfg=await config();
