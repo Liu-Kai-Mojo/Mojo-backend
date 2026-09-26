@@ -9,7 +9,7 @@ import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
-import { getTrendingVideoForClient, getCurrentTrailerCandidates, trendingConfig, warmTrendingVideoCache, normalizeMovieTitle } from "./trending.js";
+import { getTrendingVideoForClient, getCurrentTrailerCandidates, trendingConfig, warmTrendingVideoCache, runYouTubeDiagnostic, normalizeMovieTitle } from "./trending.js";
 
 const app=express();
 app.set("trust proxy",1);
@@ -640,7 +640,7 @@ app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.Nex
 const server=app.listen(port,"0.0.0.0",()=>{console.log(`Box Office Mojo API listening on ${port}`);void runMigrationsUntilReady();});
 server.on("error",e=>{console.error(e);process.exitCode=1;});
 const trendingWarmup=setInterval(()=>{void upsertDefaultTaskPriceSettings().catch(error=>console.error("[pricing-config]",error));
-void warmTrendingVideoCache().catch(()=>{});},5*60_000);trendingWarmup.unref();
+void runYouTubeDiagnostic().catch(()=>{}); void warmTrendingVideoCache().catch(()=>{});},5*60_000);trendingWarmup.unref();
 void warmTrendingVideoCache().catch(()=>{});
 
 function runMigrations(){return new Promise<void>((resolve,reject)=>{const args=["prisma","migrate","deploy","--schema=prisma/schema.prisma"];migrationProcess=execFile(process.platform==="win32"?(process.env.ComSpec||"cmd.exe"):"npx",process.platform==="win32"?["/d","/s","/c","npx "+args.join(" ")]:args,{cwd:process.cwd(),env:process.env,windowsHide:true},(error,stdout,stderr)=>{migrationProcess=null;if(stdout.trim())console.log(stdout.trim());if(stderr.trim())console.error(stderr.trim());error?reject(error):resolve();});});}
