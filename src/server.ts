@@ -534,8 +534,26 @@ app.post("/api/admin/clients/:id/tasks",auth(staff),asyncRoute(async(req,res)=>{
   res.json({task:taskPublic(task,true),message:"Task saved for this client."});
 }));
 app.get("/api/admin/task-management",auth(staff),asyncRoute(async(_req,res)=>{
-  const role=res.locals.auth.role;const clients=await prisma.user.findMany({where:staffWhere(role,res.locals.auth.sub),orderBy:{createdAt:"desc"}});
-  const rows=await Promise.all(clients.map(async client=>{const config=await getTaskManagementConfig(client.id);const session=await prisma.taskSession.findFirst({where:{clientId:client.id},orderBy:{createdAt:"desc"}});const tasks=session?await prisma.task.findMany({where:{sessionId:session.id}}):[];return {...safeUser(client),taskManagement:{taskCount:session?.generatedTaskCount??config.taskCount,completedTasks:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,remainingTasks:tasks.filter(t=>t.status===TaskStatus.PENDING).length,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:session?.amountOverrideCents??config.amountCents,combinationTaskCount:session?.combinationTaskCount??config.combinationTaskCount,combinationTaskAmountCents:session?.combinationTaskAmountCents??config.combinationTaskAmountCents,sessionId:session?.id??null}}));
+  const role=res.locals.auth.role;
+  const clients=await prisma.user.findMany({where:staffWhere(role,res.locals.auth.sub),orderBy:{createdAt:"desc"}});
+  const rows:any[]=[];
+  for(const client of clients){
+    const config=await getTaskManagementConfig(client.id);
+    const session=await prisma.taskSession.findFirst({where:{clientId:client.id},orderBy:{createdAt:"desc"}});
+    const tasks=session?await prisma.task.findMany({where:{sessionId:session.id}}):[];
+    rows.push({...safeUser(client),taskManagement:{
+      taskCount:session?.generatedTaskCount??config.taskCount,
+      completedTasks:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,
+      remainingTasks:tasks.filter(t=>t.status===TaskStatus.PENDING).length,
+      resetCount:config.resetCount,
+      vipLevel:session?.vipLevel??config.vipLevel,
+      requiredDepositCents:config.requiredDepositCents,
+      amountCents:session?.amountOverrideCents??config.amountCents,
+      combinationTaskCount:session?.combinationTaskCount??config.combinationTaskCount,
+      combinationTaskAmountCents:session?.combinationTaskAmountCents??config.combinationTaskAmountCents,
+      sessionId:session?.id??null
+    }});
+  }
   res.json({clients:rows});
 }));
 app.get("/api/admin/clients/:id/task-management",auth(staff),asyncRoute(async(req,res)=>{
