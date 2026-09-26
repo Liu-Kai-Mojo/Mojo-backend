@@ -233,7 +233,7 @@ app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const userId=res.locals.auth.sub;const config=await getTaskManagementConfig(userId);
   const session=await prisma.taskSession.findFirst({where:{clientId:userId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
   const tasks=session?await prisma.task.findMany({where:{sessionId:session.id},orderBy:{sequence:"asc"}}):[];
-  const [u,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);
+  const [u,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);const vipBenefits=await Promise.all(["VIP1","VIP2","VIP3","VIP4"].map(async vip=>{const rule=await getVipRule(vip);return {vipLevel:vip,taskCount:rule.taskCount,commissionRateBps:rule.commissionRateBps};}));
   res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),taskConfig:{taskCount:session?.generatedTaskCount??config.taskCount,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents},vipBenefits,benefitRules:[{days:5,label:"Milestone benefit"},{days:15,label:"Enhanced milestone benefit"},{days:30,label:"Extended milestone benefit"}],transactions:txs,messages});
 }));
 app.get("/api/client/leaderboard",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
@@ -317,7 +317,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
     const amount=await randomTaskAmount(user.balanceCents,user.frozenCents);
     if(amount===null)return res.status(409).json({error:"Your balance is too low to start this task. Please add funds before continuing."});
     try{
-      const video=await getAlternativeVideoForTask(clientId,task.movieId||null,task.videoId||null);
+      const video=await getAlternativeVideoForTask(clientId,task.movieTitle||null,task.videoId||null);
       updated=await prisma.task.update({where:{id},data:{
         amountCents:amount,commissionCents:defaultCommission(amount,user.balanceCents),revealedAt:new Date(),
         videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
