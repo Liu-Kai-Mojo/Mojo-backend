@@ -88,17 +88,16 @@ const DEFAULT_INDIA_CHANNEL_EXCLUSIONS="";
 const INDIA_TITLE_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_TITLE_EXCLUSIONS||DEFAULT_INDIA_TITLE_EXCLUSIONS,"i");
 const INDIA_CHANNEL_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_CHANNEL_EXCLUSIONS||DEFAULT_INDIA_CHANNEL_EXCLUSIONS,"i");
 function isLikelyTrailer(title:string,description:string,channelTitle=""){
-  const titleText=title.toLowerCase();
-  const channelText=channelTitle.toLowerCase();
-  const positive=/\b(official\s+trailer|official\s+teaser(?:\s+trailer)?|final\s+trailer|new\s+trailer|movie\s+trailer|film\s+trailer|trailer|teaser)\b/.test(titleText);
-  const negativeTitle=/\b(reaction|reacts|review|recap|explained|breakdown|fan\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\s+the\s+scenes|podcast|news|gameplay|song|lyric|ost)\b/.test(titleText);
-  const negativeChannel=/\b(reaction|review|recap|explained|breakdown|parody|spoof|shorts?|podcast|news|gameplay|music)\b/.test(channelText);
-  const regional=/\b(my[a-z]*anmar|burmese|bollywood|hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi|tollywood|kollywood|thai|korean|japanese|chinese|indonesian|filipino)\b/i;
-  const hollywoodChannel=/\b(warner\s+bros|warner\s+bros\.\s+pictures|universal\s+pictures|sony\s+pictures|columbia\s+pictures|paramount\s+pictures|20th\s+century\s+studios|lionsgate|a24|focus\s+features|disney|marvel\s+entertainment|dc|dc\s+studios|pixar|dreamworks|new\s+line\s+cinema|legendary|mgm|amazon\s+mgm|searchlight|blumhouse|netflix)\b/i.test(channelTitle);
-  const hollywoodTitle=/\b(warner\s+bros|universal\s+pictures|sony\s+pictures|paramount|20th\s+century|lionsgate|a24|marvel|dc\s+studios|pixar|dreamworks|new\s+line|legendary|mgm)\b/i.test(title);
-  if(INDIA_TITLE_EXCLUSIONS.test(title+" "+description)||INDIA_CHANNEL_EXCLUSIONS.test(channelTitle))return false;
-  if(regional.test(title+" "+channelTitle+" "+description))return false;
-  return positive&&!negativeTitle&&!negativeChannel&&(hollywoodChannel||hollywoodTitle||/\bhollywood\b/i.test(title+" "+description));
+  const titleText=String(title||"").toLowerCase();
+  const channelText=String(channelTitle||"").toLowerCase();
+  const negativeTitle=/\\b(reaction|reacts|review|recap|explained|breakdown|fan\\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\\s+the\\s+scenes|podcast|news|gameplay|song|lyric|ost)\\b/i.test(titleText);
+  const negativeChannel=/\\b(reaction|review|recap|explained|breakdown|parody|spoof|shorts?|podcast|news|gameplay|music)\\b/i.test(channelText);
+  // Do not require words such as "official trailer", "trailer", or a
+  // Hollywood studio name. Valid movie trailers are identified by the
+  // discovery query and then by backend video validation, not exact title
+  // wording or geography.
+  if(INDIA_TITLE_EXCLUSIONS.test(String(title)+" "+String(description))||INDIA_CHANNEL_EXCLUSIONS.test(String(channelTitle)))return false;
+  return !negativeTitle&&!negativeChannel;
 }
 function scoreVideo(v:TrendingVideo,cfg:TrendingConfig){
   const text=(v.title+" "+v.description+" "+v.channelTitle).toLowerCase();
@@ -147,19 +146,8 @@ async function discover(cfg:TrendingConfig){
   // chosen query per refresh and only fall back when the first query returns
   // no usable candidates. Region is intentionally global (no regionCode).
   const configuredQueries=cfg.discoveryQueries.filter(Boolean);
-  const fallbackQueries=[
-    "Hollywood movie official trailer",
-    "new Hollywood movie trailer",
-    "upcoming Hollywood movie trailer",
-    "popular Hollywood movie trailer"
-  ];
-  const hollywoodFallbackQueries=[
-    "Warner Bros Pictures official movie trailer",
-    "Universal Pictures official movie trailer",
-    "Sony Pictures official movie trailer",
-    "Paramount Pictures official movie trailer",
-    "Lionsgate official movie trailer"
-  ];
+  const fallbackQueries:string[]=[];
+  const hollywoodFallbackQueries:string[]=[];
   const queries=[...configuredQueries,...fallbackQueries,...hollywoodFallbackQueries]
     .map(q=>q.replace(/\\b20\\d{2}\\b/g,String(new Date().getUTCFullYear())).trim())
     .filter((q,i,a)=>q&&a.indexOf(q)===i);
@@ -178,6 +166,7 @@ async function discover(cfg:TrendingConfig){
     url.searchParams.set("maxResults",String(Math.min(25,Math.max(10,cfg.maxCandidates))));
     url.searchParams.set("q",query);
     url.searchParams.set("key",key);
+    console.log("[trending] YouTube search request",{operation:"search.list",endpoint:"https://youtube.googleapis.com/youtube/v3/search",part:"snippet",q:query,type:"video",maxResults:Number(url.searchParams.get("maxResults")),regionCode:null,relevanceLanguage:url.searchParams.get("relevanceLanguage"),safeSearch:null,order:url.searchParams.get("order"),videoEmbeddable:null,videoSyndicated:null});
     return youtubeRequest(url,"YouTube trailer search");
   };
 
@@ -215,47 +204,34 @@ async function discover(cfg:TrendingConfig){
   const details:any=await youtubeRequest(detailUrl,"YouTube video validation");
 
   const candidates:TrendingVideo[]=[];
+  const rejected:Record<string,number>={};
+  const reject=(reason:string)=>{rejected[reason]=(rejected[reason]||0)+1;};
   for(const item of Array.isArray(details.items)?details.items:[]){
     const snippet=item.snippet||{};
     const status=item.status||{};
     const stats=item.statistics||{};
-    const duration=parseDuration(String(item.contentDetails?.duration||""));
-    const published=String(snippet.publishedAt||"");
-    const rawTitle=String(snippet.title||"");
+    const rawTitle=String(snippet.title||"").trim();
     const description=String(snippet.description||"");
-    const channelTitle=String(snippet.channelTitle||"");
-    if(!item.id||String(status.privacyStatus)!=="public"||status.embeddable!==true||!published)continue;
-    if(cfg.freshnessDays&&Date.parse(published)<Date.now()-Math.max(cfg.freshnessDays,365)*86400000)continue;
-    if(!isLikelyTrailer(rawTitle,description,channelTitle))continue;
-    if(duration<cfg.minDurationSeconds||(cfg.maxDurationSeconds>0&&duration>cfg.maxDurationSeconds))continue;
-    const thumb=String(
-      snippet.thumbnails?.maxres?.url||
-      snippet.thumbnails?.high?.url||
-      snippet.thumbnails?.standard?.url||
-      snippet.thumbnails?.medium?.url||
-      snippet.thumbnails?.default?.url||""
-    );
-    if(!thumb)continue;
+    const channelTitle=String(snippet.channelTitle||"").trim();
+    const videoId=String(item.id||"").trim();
+    if(!videoId){reject("missing_video_id");continue;}
+    if(String(status.privacyStatus)!=="public"){reject("not_public");continue;}
+    if(status.embeddable!==true){reject("not_embeddable");continue;}
+    const published=String(snippet.publishedAt||"");
+    if(!published){reject("missing_published_at");continue;}
+    if(cfg.freshnessDays&&Date.parse(published)<Date.now()-Math.max(cfg.freshnessDays,365)*86400000){reject("too_old");continue;}
+    if(!isLikelyTrailer(rawTitle,description,channelTitle)){reject("title_or_channel_exclusion");continue;}
+    const duration=parseDuration(String(item.contentDetails?.duration||""));
+    if(duration<cfg.minDurationSeconds){reject("too_short");continue;}
+    if(cfg.maxDurationSeconds>0&&duration>cfg.maxDurationSeconds){reject("too_long");continue;}
+    const thumb=String(snippet.thumbnails?.maxres?.url||snippet.thumbnails?.high?.url||snippet.thumbnails?.standard?.url||snippet.thumbnails?.medium?.url||snippet.thumbnails?.default?.url||"");
+    if(!thumb){reject("missing_thumbnail");continue;}
     const cleanTitle=normalizeMovieTitle(rawTitle);
-    if(!cleanTitle||cleanTitle==="Movie")continue;
-    candidates.push({
-      provider:"youtube",
-      videoId:String(item.id),
-      title:cleanTitle,
-      description,
-      channelId:String(snippet.channelId||""),
-      channelTitle:clean(channelTitle),
-      thumbnailUrl:thumb,
-      durationSeconds:duration,
-      publishedAt:published,
-      categoryId:String(snippet.categoryId||""),
-      viewCount:Number(stats.viewCount||0),
-      likeCount:Number(stats.likeCount||0),
-      commentCount:Number(stats.commentCount||0),
-      liveBroadcastContent:String(snippet.liveBroadcastContent||"none")
-    });
+    if(!cleanTitle){reject("empty_normalized_title");continue;}
+    const candidate:TrendingVideo={provider:"youtube",videoId,title:cleanTitle,description,channelId:String(snippet.channelId||""),channelTitle,publishedAt:published,thumbnailUrl:thumb,durationSeconds:duration,categoryId:String(snippet.categoryId||""),viewCount:Number(stats.viewCount||0),likeCount:Number(stats.likeCount||0),commentCount:Number(stats.commentCount||0),liveBroadcastContent:String(snippet.liveBroadcastContent||"none")};
+    candidates.push(candidate);
   }
-
+  console.log("[trending] YouTube post-search filtering",{query:selectedQuery,returnedFromVideosList:Array.isArray(details.items)?details.items.length:0,acceptedBeforeRanking:candidates.length,rejected});
   const finalPool=rank(candidates,cfg);
   console.log("[trending] YouTube validation",{
     query:selectedQuery,
