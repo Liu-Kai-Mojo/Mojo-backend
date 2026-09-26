@@ -112,8 +112,12 @@ async function getTaskManagementConfig(clientId:string):Promise<TaskManagementCo
   let parsed:any={};try{parsed=configRow?.value?JSON.parse(configRow.value):{};}catch{}
   const vipLevel=normalizeVipLevel(parsed.vipLevel??"VIP1");const vipRule=await getVipRule(vipLevel);
   const taskCount=vipRule.taskCount;
-  const sequences=Array.isArray(parsed.combinationTaskSequences)
-    ? [...new Set(parsed.combinationTaskSequences.map((v:any)=>Math.trunc(Number(v))).filter((v:number)=>Number.isInteger(v)&&v>=1&&v<=taskCount))].sort((a:number,b:number)=>a-b)
+  const sequences:number[]=Array.isArray(parsed.combinationTaskSequences)
+    ? Array.from(new Set<number>(
+        parsed.combinationTaskSequences
+          .map((v:any)=>Math.trunc(Number(v)))
+          .filter((v:number)=>Number.isInteger(v)&&v>=1&&v<=taskCount)
+      )).sort((a,b)=>a-b)
     : [];
   return {taskCount,requiredDepositCents:clampMoneyCents(Number(parsed.requiredDepositCents??0)),amountCents:clampMoneyCents(Number(parsed.amountCents??0)),vipLevel,resetCount:Math.max(0,Math.min(100000,Math.trunc(Number(parsed.resetCount??0)))),cycleStartSequence:Math.max(1,Math.trunc(Number(cycleRow?.value||parsed.cycleStartSequence||1))),combinationTaskCount:sequences.length,combinationTaskAmountCents:clampMoneyCents(Number(parsed.combinationTaskAmountCents??0)),combinationTaskSequences:sequences,combinationCommissionRateBps:1500};
 }
