@@ -134,7 +134,7 @@ function taskPublic(t:any,includeValues=false){
   return {
     id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
-    requiredWatchSeconds:t.requiredWatchSeconds??2.5,
+    requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,
     movie:t.videoId?{title:t.videoTitle||t.title,posterUrl:t.videoThumbnailUrl||"",releaseDate:t.videoPublishedAt||null}:null,
     video:t.videoId?{
       provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||t.title,
