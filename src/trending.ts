@@ -160,7 +160,7 @@ async function discover(cfg:TrendingConfig){
     const url=new URL(searchUrl);
     url.searchParams.set("part","snippet");
     url.searchParams.set("type","video");
-    url.searchParams.set("videoEmbeddable","true");
+    // Discover broadly, then validate embeddability from videos.list.status below.
     // Relevance is more reliable than date/view-count sorting when combined
     // with search filters; use configured order only when it is relevance.
     url.searchParams.set("order",order==="relevance"?"relevance":"relevance");
