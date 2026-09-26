@@ -82,6 +82,7 @@ model Movie {
   updatedAt   DateTime       @updatedAt
 
   history     MovieHistory[]
+  trailerCache TrailerCache[]
 }
 
 model MovieHistory {
