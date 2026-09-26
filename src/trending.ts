@@ -86,11 +86,13 @@ const DEFAULT_INDIA_CHANNEL_EXCLUSIONS="";
 const INDIA_TITLE_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_TITLE_EXCLUSIONS||DEFAULT_INDIA_TITLE_EXCLUSIONS,"i");
 const INDIA_CHANNEL_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_CHANNEL_EXCLUSIONS||DEFAULT_INDIA_CHANNEL_EXCLUSIONS,"i");
 function isLikelyTrailer(title:string,description:string,channelTitle=""){
-  const text=(title+" "+description).toLowerCase();
-  const positive=/\b(official\s+trailer|official\s+teaser(?:\s+trailer)?|final\s+trailer|new\s+trailer|movie\s+trailer|film\s+trailer|trailer|teaser)\b/.test(text);
-  const negative=/\b(reaction|reacts|review|recap|explained|breakdown|fan\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\s+the\s+scenes|podcast|news|gameplay)\b/.test(text);
+  const titleText=title.toLowerCase();
+  const channelText=channelTitle.toLowerCase();
+  const positive=/\b(official\s+trailer|official\s+teaser(?:\s+trailer)?|final\s+trailer|new\s+trailer|movie\s+trailer|film\s+trailer|trailer|teaser)\b/.test(titleText);
+  const negativeTitle=/\b(reaction|reacts|review|recap|explained|breakdown|fan\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\s+the\s+scenes|podcast|news|gameplay)\b/.test(titleText);
+  const negativeChannel=/\b(reaction|review|recap|explained|breakdown|parody|spoof|shorts?|podcast|news|gameplay)\b/.test(channelText);
   if(INDIA_TITLE_EXCLUSIONS.test(title+" "+description)||INDIA_CHANNEL_EXCLUSIONS.test(channelTitle))return false;
-  return positive&&!negative;
+  return positive&&!negativeTitle&&!negativeChannel;
 }
 function scoreVideo(v:TrendingVideo,cfg:TrendingConfig){
   const text=(v.title+" "+v.description+" "+v.channelTitle).toLowerCase();
@@ -143,26 +145,32 @@ async function discover(cfg:TrendingConfig){
   ];
   const pair=discoveryPairs[queryCursor%discoveryPairs.length];
   queryCursor=(queryCursor+1)%discoveryPairs.length;
-  const query=pair.query.replace(/\b20\d{2}\b/g,String(year));
-  const searches=discoveryPairs.slice(0,Math.min(5,discoveryPairs.length));
-  const publishedAfter=new Date(Date.now()-cfg.freshnessDays*86400000).toISOString();
   const searchUrl=new URL("https://www.googleapis.com/youtube/v3/search");
-  const searchResults=await Promise.all(searches.map(async pair=>{
+  const searchResults:any[]=[];
+  const searchPair=async (p:{query:string;order:string}, useFreshness:boolean)=>{
     const url=new URL(searchUrl);
     url.searchParams.set("part","snippet");
     url.searchParams.set("type","video");
     url.searchParams.set("videoEmbeddable","true");
-    url.searchParams.set("order",pair.order);
+    url.searchParams.set("order",p.order);
     if(cfg.regionCode)url.searchParams.set("regionCode",cfg.regionCode);
     url.searchParams.set("relevanceLanguage",cfg.relevanceLanguage);
-    url.searchParams.set("maxResults",String(Math.min(25,Math.max(10,Math.ceil(cfg.maxCandidates/searches.length)))));
-    url.searchParams.set("publishedAfter",publishedAfter);
-    url.searchParams.set("q",pair.query.replace(/\\b20\\d{2}\\b/g,String(year)));
+    url.searchParams.set("maxResults",String(Math.min(25,Math.max(10,cfg.maxCandidates))));
+    if(useFreshness)url.searchParams.set("publishedAfter",new Date(Date.now()-cfg.freshnessDays*86400000).toISOString());
+    url.searchParams.set("q",p.query.replace(/\b20\d{2}\b/g,String(year)));
     url.searchParams.set("key",key);
     return youtubeRequest(url,"YouTube trailer search");
-  }));
-  const ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
-  console.log("[trending] YouTube discovery",{operation:"search",queries:searches.map(x=>x.query),orders:searches.map(x=>x.order),region:cfg.regionCode||"GLOBAL",resultCount:ids.length});
+  };
+  const first=await searchPair(pair,true);
+  searchResults.push(first);
+  let ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
+  console.log("[trending] YouTube discovery",{operation:"search",query:pair.query,order:pair.order,region:cfg.regionCode||"GLOBAL",resultCount:ids.length});
+  if(!ids.length){
+    const fallback=await searchPair(pair,false);
+    searchResults.push(fallback);
+    ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
+    console.log("[trending] YouTube discovery fallback",{query:pair.query,resultCount:ids.length});
+  }
   if(!ids.length)throw providerError("NO_VALID_TRAILER","YouTube returned no trailer candidates.");
   const detailUrl=new URL("https://www.googleapis.com/youtube/v3/videos");
   detailUrl.searchParams.set("part","snippet,contentDetails,status,statistics");detailUrl.searchParams.set("id",ids.join(","));detailUrl.searchParams.set("key",key);
@@ -172,14 +180,34 @@ async function discover(cfg:TrendingConfig){
     const snippet=item.snippet||{}, status=item.status||{}, stats=item.statistics||{}, duration=parseDuration(String(item.contentDetails?.duration||""));
     const published=String(snippet.publishedAt||"");
     if(!item.id||String(status.privacyStatus)!=="public"||status.embeddable!==true||!published)continue;
-    if(cfg.freshnessDays&&Date.parse(published)<Date.now()-cfg.freshnessDays*86400000)continue;
+    if(cfg.freshnessDays&&Date.parse(published)<Date.now()-Math.max(cfg.freshnessDays,365)*86400000)continue;
     if(!isLikelyTrailer(String(snippet.title||""),String(snippet.description||""),String(snippet.channelTitle||"")))continue;
     if(duration<cfg.minDurationSeconds||(cfg.maxDurationSeconds>0&&duration>cfg.maxDurationSeconds))continue;
     const thumb=String(snippet.thumbnails?.maxres?.url||snippet.thumbnails?.high?.url||snippet.thumbnails?.medium?.url||snippet.thumbnails?.default?.url||"");
     if(!thumb)continue;
     candidates.push({provider:"youtube",videoId:String(item.id),title:movieTitle(String(snippet.title||"")),description:String(snippet.description||""),channelId:String(snippet.channelId||""),channelTitle:clean(String(snippet.channelTitle||"")),thumbnailUrl:thumb,durationSeconds:duration,publishedAt:published,categoryId:String(snippet.categoryId||""),viewCount:Number(stats.viewCount||0),likeCount:Number(stats.likeCount||0),commentCount:Number(stats.commentCount||0),liveBroadcastContent:String(snippet.liveBroadcastContent||"none")});
   }
-  const finalPool=rank(candidates,cfg);
+  let finalPool=rank(candidates,cfg);
+  if(!finalPool.length){
+    const fallbackPair=discoveryPairs[(queryCursor+1)%discoveryPairs.length];
+    const fallback=await searchPair(fallbackPair,false);
+    const fallbackIds=[...new Set(Array.isArray(fallback.items)?fallback.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[])].slice(0,50);
+    if(fallbackIds.length){
+      detailUrl.searchParams.set("id",fallbackIds.join(","));
+      const fallbackDetails:any=await youtubeRequest(detailUrl,"YouTube fallback video validation");
+      for(const item of Array.isArray(fallbackDetails.items)?fallbackDetails.items:[]){
+        const snippet=item.snippet||{}, status=item.status||{}, stats=item.statistics||{}, duration=parseDuration(String(item.contentDetails?.duration||""));
+        const published=String(snippet.publishedAt||"");
+        if(!item.id||String(status.privacyStatus)!=="public"||status.embeddable!==true||!published)continue;
+        if(!isLikelyTrailer(String(snippet.title||""),String(snippet.description||""),String(snippet.channelTitle||"")))continue;
+        if(duration<cfg.minDurationSeconds||(cfg.maxDurationSeconds>0&&duration>cfg.maxDurationSeconds))continue;
+        const thumb=String(snippet.thumbnails?.maxres?.url||snippet.thumbnails?.high?.url||snippet.thumbnails?.medium?.url||snippet.thumbnails?.default?.url||"");
+        if(!thumb)continue;
+        candidates.push({provider:"youtube",videoId:String(item.id),title:movieTitle(String(snippet.title||"")),description:String(snippet.description||""),channelId:String(snippet.channelId||""),channelTitle:clean(String(snippet.channelTitle||"")),thumbnailUrl:thumb,durationSeconds:duration,publishedAt:published,categoryId:String(snippet.categoryId||""),viewCount:Number(stats.viewCount||0),likeCount:Number(stats.likeCount||0),commentCount:Number(stats.commentCount||0),liveBroadcastContent:String(snippet.liveBroadcastContent||"none")});
+      }
+      finalPool=rank(candidates,cfg);
+    }
+  }
   console.log("[trending] YouTube validation",{candidateCount:candidates.length,validatedCount:finalPool.length});
   if(!finalPool.length)throw providerError("NO_VALID_TRAILER","No valid embeddable movie trailer was found.");
   return finalPool;
