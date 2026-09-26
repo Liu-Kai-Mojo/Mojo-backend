@@ -166,7 +166,7 @@ async function upsertDefaultVipRules(){
 function taskPublic(t:any,includeValues=false){
   const completed=String(t.status||"")===TaskStatus.COMPLETED;
   const hasAssignedVideo=Boolean(t.videoId);
-  const movieTitle=String(t.movieTitle||t.videoTitle||t.title||"").trim();
+  const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title||"").trim());
   const moviePosterUrl=String(t.moviePosterUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
   return {
@@ -228,7 +228,7 @@ app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const setting=admin?await prisma.setting.findUnique({where:{key:`telegram_admin_${admin.id}`}}):null;
   res.json({admin:admin?{id:admin.id,name:admin.name}:null,telegramUsername:setting?.value||null});
 }));
-app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({title:v.title,videoId:v.videoId,posterUrl:v.thumbnailUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
+app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({title:normalizeMovieTitle(v.movieTitle||v.title),movieTitle:normalizeMovieTitle(v.movieTitle||v.title),videoId:v.videoId,posterUrl:v.moviePosterUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const userId=res.locals.auth.sub;const config=await getTaskManagementConfig(userId);
   const session=await prisma.taskSession.findFirst({where:{clientId:userId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
