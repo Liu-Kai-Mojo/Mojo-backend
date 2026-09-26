@@ -186,6 +186,34 @@ app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
 }));
 app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({title:v.title,videoId:v.videoId,posterUrl:v.thumbnailUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.task.findMany({where:{clientId:userId},orderBy:{sequence:"asc"}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),transactions:txs,messages});}));
+app.get("/api/client/leaderboard",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const now=new Date();
+  const day=now.getUTCDay();
+  const daysFromMonday=(day+6)%7;
+  const weekStart=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()-daysFromMonday,0,0,0,0));
+  const totals=await prisma.walletTransaction.groupBy({
+    by:["userId"],
+    where:{type:"TASK_COMMISSION",createdAt:{gte:weekStart}},
+    _sum:{amountCents:true},
+    orderBy:{_sum:{amountCents:"desc"}},
+    take:12
+  });
+  const ids=totals.map(x=>x.userId);
+  const users=ids.length?await prisma.user.findMany({where:{id:{in:ids},role:Role.CLIENT,active:true},select:{id:true,name:true}}):[];
+  const byId=new Map(users.map(u=>[u.id,u]));
+  const mask=(value:string)=>Array.from(String(value||"")).slice(0,2).join("")+"***";
+  const entries=totals.map((row,index)=>{
+    const user=byId.get(row.userId);
+    if(!user)return null;
+    return {
+      rank:index+1,
+      name:mask(user.name),
+      uid:mask(user.id),
+      rewardCents:Math.max(0,Number(row._sum.amountCents||0))
+    };
+  }).filter(Boolean);
+  res.json({weekStart:weekStart.toISOString(),entries});
+}));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
 app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const tasks=await prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"}});const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:tasks.length});}));
 app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
