@@ -315,6 +315,14 @@ async function selectMany(clientId:string,pool:TrendingVideo[],count:number,cfg:
   if(selected.length<count){
     for(const v of pool){if(used.has(v.videoId))continue;selected.push(v);used.add(v.videoId);if(selected.length>=count)break;}
   }
+  // If the catalog is smaller than the requested task count, reuse cached
+  // videos only after every eligible unique video has been used once.
+  // This avoids quota hammering while still allowing the TaskSession to be
+  // generated normally when the cache is temporarily small.
+  if(selected.length<count){
+    let index=0;
+    while(selected.length<count&&pool.length){selected.push(pool[index%pool.length]);index++;}
+  }
   return selected;
 }
 async function select(clientId:string,pool:TrendingVideo[],cfg:TrendingConfig){return (await selectMany(clientId,pool,1,cfg))[0];}
