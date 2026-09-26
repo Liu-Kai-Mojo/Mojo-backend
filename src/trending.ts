@@ -125,7 +125,8 @@ async function youtubeRequest(url:URL,operation:string){
   try{response=await fetch(url,{signal:AbortSignal.timeout(9000)});}
   catch(error){if(error instanceof Error&&error.name==="TimeoutError")throw providerError("YOUTUBE_TIMEOUT",operation+" timed out.");throw providerError("YOUTUBE_SERVICE_UNAVAILABLE",operation+" could not be reached.");}
   if(!response.ok){
-    let detail="";try{const body:any=await response.json();detail=String(body?.error?.errors?.[0]?.reason||body?.error?.status||"");}catch{}
+    let detail="";let message="";let reasons:string[]=[];try{const body:any=await response.json();detail=String(body?.error?.errors?.[0]?.reason||body?.error?.status||"");message=String(body?.error?.message||"");reasons=Array.isArray(body?.error?.errors)?body.error.errors.map((e:any)=>String(e?.reason||"")).filter(Boolean).slice(0,5):[];}catch{}
+    console.error("[youtube] upstream error",{operation,status:response.status,statusText:response.statusText,reason:detail,message,reasons});
     if(response.status===400)return providerError("YOUTUBE_INVALID_REQUEST","YouTube rejected the request."+detail);
     if(response.status===401)return providerError("YOUTUBE_AUTH_ERROR","YouTube authentication failed.");
     if(response.status===403)return providerError(/quota/i.test(detail)?"YOUTUBE_QUOTA_EXCEEDED":"YOUTUBE_AUTH_ERROR",/quota/i.test(detail)?"YouTube quota has been exceeded.":"YouTube authentication or API access was rejected.");
@@ -313,6 +314,27 @@ export async function getCurrentTrailerCandidates(){
   if(stale.length){void refresh(cfg).catch(()=>{});return stale;}
   try{return await refresh(cfg);}catch{return [];}
 }
+let youtubeDiagnosticStarted=false;
+export async function runYouTubeDiagnostic(){
+  if(youtubeDiagnosticStarted)return;
+  youtubeDiagnosticStarted=true;
+  const key=String(process.env.YOUTUBE_API_KEY||"").trim();
+  if(!key){console.error("[youtube-diagnostic] missing YOUTUBE_API_KEY");return;}
+  const url=new URL("https://youtube.googleapis.com/youtube/v3/search");
+  url.searchParams.set("part","snippet");
+  url.searchParams.set("type","video");
+  url.searchParams.set("maxResults","1");
+  url.searchParams.set("q","Inception official trailer");
+  url.searchParams.set("relevanceLanguage","en");
+  url.searchParams.set("key",key);
+  try{
+    const result=await youtubeRequest(url,"YouTube minimal diagnostic search");
+    console.log("[youtube-diagnostic] success",{httpStatus:200,query:"Inception official trailer",type:"video",maxResults:1,resultCount:Array.isArray(result?.items)?result.items.length:0});
+  }catch(error){
+    console.error("[youtube-diagnostic] failed",{code:(error as any)?.code||"UNKNOWN",message:error instanceof Error?error.message:String(error)});
+  }
+}
+
 export async function warmTrendingVideoCache(){
   const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0};
   const pool=await loadCache(cfg);
