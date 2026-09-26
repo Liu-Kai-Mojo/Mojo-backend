@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import { execFile, type ChildProcess } from "node:child_process";
 import { randomInt } from "node:crypto";
-import { Role, IdentifierType, MessageStatus, TaskStatus } from "@prisma/client";
+import { Prisma, Role, IdentifierType, MessageStatus, TaskStatus } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
@@ -105,16 +105,15 @@ function secureRandomCents(min:number,max:number){
   if(max<=min)return min;
   return min+randomInt(max-min+1);
 }
-async function randomTaskAmount(availableBalanceCents:number){
+async function randomTaskAmount(balanceCents:number,frozenCents=0){
   const cfg=await taskPriceConfig();
-  const safeMax=Math.min(
-    availableBalanceCents-cfg.minRemainingBalanceCents,
-    cfg.maxAbsoluteCents,
-    Math.floor(availableBalanceCents*cfg.maxPercent/100)
-  );
-  const safeMin=Math.max(cfg.minAbsoluteCents,Math.ceil(availableBalanceCents*cfg.minPercent/100));
-  if(safeMax<safeMin)return null;
+  const currentBalance=Math.max(0,Math.floor(balanceCents));
+  const availableBalance=Math.max(0,currentBalance-Math.max(0,Math.floor(frozenCents)));
+  const safeMax=Math.min(availableBalance-cfg.minRemainingBalanceCents,cfg.maxAbsoluteCents,Math.floor(currentBalance*cfg.maxPercent/100));
+  const safeMin=Math.max(cfg.minAbsoluteCents,Math.ceil(currentBalance*cfg.minPercent/100));
+  if(currentBalance<=0||safeMax<safeMin)return null;
   return secureRandomCents(safeMin,safeMax);
+}
 }
 async function upsertDefaultTaskPriceSettings(){
   const defaults:{key:string;value:string}[]=[
@@ -237,15 +236,28 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
   if(active)return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(active,true)});
   const task=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,revealedAt:null},orderBy:{sequence:"asc"}});
   if(!task)return res.status(409).json({success:false,error:"There are no pending tasks available right now.",code:"NO_PENDING_TASK"});
-  const user=await prisma.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}});
-  const availableBalanceCents=Math.max(0,user.balanceCents-(user.frozenCents??0));
-  const amount=await randomTaskAmount(availableBalanceCents);
-  if(amount===null)return res.status(409).json({success:false,error:"Your available balance is not enough to start this task. Please add funds before continuing.",code:"LOW_BALANCE"});
   try{
-    const video=await getTrendingVideoForClient(clientId);const now=new Date();
-    const result=await prisma.task.updateMany({where:{id:task.id,status:TaskStatus.PENDING,revealedAt:null},data:{amountCents:amount,commissionCents:defaultCommission(amount,availableBalanceCents),revealedAt:now,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.title,moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:idempotencyKey||null,watchAccumulatedMs:0,watchHeartbeatAt:null}});
-    if(result.count===0){const claimed=await prisma.task.findFirstOrThrow({where:{id:task.id,status:TaskStatus.PENDING}});return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(claimed,true)});}
-    const updated=await prisma.task.findUniqueOrThrow({where:{id:task.id}});return res.json({success:true,task:taskPublic(updated,true)});
+    const video=await getTrendingVideoForClient(clientId);
+    const result=await prisma.$transaction(async tx=>{
+      const currentTask=await tx.task.findUniqueOrThrow({where:{id:task.id}});
+      if(currentTask.status!==TaskStatus.PENDING||currentTask.revealedAt)return {conflict:true,task:currentTask};
+      const user=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}});
+      const amount=await randomTaskAmount(user.balanceCents,user.frozenCents);
+      if(amount===null)throw Object.assign(new Error("Your available balance is not enough to start this task. Please add funds before continuing."),{code:"LOW_BALANCE"});
+      const updated=await tx.task.update({where:{id:task.id},data:{
+        amountCents:amount,commissionCents:defaultCommission(amount,user.balanceCents),revealedAt:new Date(),
+        requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,
+        videoTitle:video.title,movieTitle:video.title,moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,
+        videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
+        videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,
+        videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",
+        idempotencyKey:idempotencyKey||null,watchAccumulatedMs:0,watchHeartbeatAt:null
+      }});
+      return {conflict:false,task:updated};
+    },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
+    if(result.conflict)return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(result.task,true)});
+    return res.json({success:true,task:taskPublic(result.task,true)});
+
   }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
 }));
 app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
