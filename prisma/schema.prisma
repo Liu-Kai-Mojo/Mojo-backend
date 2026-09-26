@@ -195,7 +195,8 @@ model Task {
   session        TaskSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   assignedBy     User?      @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
 
-  @@unique([clientId, sequence])
+  @@unique([clientId, sessionId, sequence])
+  @@index([clientId, sequence])
   @@index([sessionId, sequence])
   @@index([clientId, status, sequence])
 }
