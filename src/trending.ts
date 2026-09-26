@@ -55,11 +55,11 @@ async function config():Promise<TrendingConfig>{
   const keys=["trending_videos_enabled","trending_region_code","trending_relevance_language","trending_cache_ttl_minutes","trending_pool_size","trending_recent_history_size","trending_repeat_cooldown_hours","trending_min_duration_seconds","trending_max_duration_seconds","trending_freshness_days","trending_max_candidates","trending_refresh_interval_minutes","trending_discovery_queries","trending_discovery_orders"];
   const values=await Promise.all(keys.map(readSetting));
   const env=process.env;
-  const rawQueries=(values[12]??env.TRENDING_DISCOVERY_QUERIES??"official movie trailer|official teaser trailer|new movie trailer|latest movie trailer|upcoming movie trailer|new film trailer").split("|").map(v=>v.trim()).filter(Boolean);
+  const rawQueries=(values[12]??env.TRENDING_DISCOVERY_QUERIES??"new movie trailer|latest movie trailer|upcoming movie trailer|trending movie trailer|popular movie trailer|official movie trailer").split("|").map(v=>v.trim()).filter(Boolean);
   const rawOrders=(values[13]??env.TRENDING_DISCOVERY_ORDERS??"date|viewCount|relevance").split("|").map(v=>v.trim()).filter(v=>["date","viewCount","relevance"].includes(v));
   return {
     enabled:(values[0]??env.TRENDING_VIDEOS_ENABLED??"true").toLowerCase()!=="false",
-    regionCode:(values[1]??env.YOUTUBE_REGION_CODE??env.TRENDING_REGION_CODE??"MM").trim().toUpperCase(),
+    regionCode:(values[1]??env.YOUTUBE_REGION_CODE??env.TRENDING_REGION_CODE??"").trim().toUpperCase(),
     relevanceLanguage:(values[2]??env.YOUTUBE_RELEVANCE_LANGUAGE??"en").trim(),
     cacheTtlMs:numberSetting(values[3]??env.TRAILER_CACHE_TTL??env.TRENDING_CACHE_TTL_MINUTES,60)*60_000,
     poolSize:Math.max(10,Math.min(50,Math.floor(numberSetting(values[4]??env.TRENDING_POOL_SIZE,30,1)))),
@@ -79,10 +79,9 @@ function parseDuration(value:string){
   return m?Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0):0;
 }
 function clean(value:string){return value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();}
-const DEFAULT_INDIA_TITLE_EXCLUSIONS="bollywood|tollywood|kollywood|mollywood|tamil\\s+(?:movie|film|trailer)|telugu\\s+(?:movie|film|trailer)|malayalam\\s+(?:movie|film|trailer)|kannada\\s+(?:movie|film|trailer)|hindi\\s+(?:movie|film|trailer)|bengali\\s+(?:movie|film|trailer)|punjabi\\s+(?:movie|film|trailer)|indian\\s+(?:movie|film|cinema)|india\\s+(?:trailer|movie|film)";
-const DEFAULT_INDIA_CHANNEL_EXCLUSIONS="t-series|zee music|zee studios|sony music india|eros now|tips official|saregama|shemaroo|ultra movie parlour|hombale films|sun tv|sun nxt|geetha arts|mythri movie makers|dream warrior pictures|lyca productions|sri venkateswara creations|dharma productions|yash raj films";
-const DEFAULT_HOLLYWOOD_CHANNELS="warner bros\\.? pictures|warner bros\\.?|universal pictures|paramount pictures|sony pictures entertainment|sony pictures|columbia pictures|20th century studios|20th century fox|lionsgate movies|lionsgate|mgm|amazon mgm studios|amazon studios|netflix|walt disney studios|disney|pixar|marvel entertainment|marvel|lucasfilm|searchlight pictures|focus features|a24";
-const HOLLYWOOD_CHANNELS=new RegExp(process.env.HOLLYWOOD_CHANNEL_ALLOWLIST||DEFAULT_HOLLYWOOD_CHANNELS,"i");
+const DEFAULT_INDIA_TITLE_EXCLUSIONS="";
+const DEFAULT_INDIA_CHANNEL_EXCLUSIONS="";
+
 const INDIA_TITLE_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_TITLE_EXCLUSIONS||DEFAULT_INDIA_TITLE_EXCLUSIONS,"i");
 const INDIA_CHANNEL_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_CHANNEL_EXCLUSIONS||DEFAULT_INDIA_CHANNEL_EXCLUSIONS,"i");
 function isLikelyTrailer(title:string,description:string,channelTitle=""){
@@ -90,7 +89,6 @@ function isLikelyTrailer(title:string,description:string,channelTitle=""){
   const positive=/\b(official\s+trailer|official\s+teaser(?:\s+trailer)?|final\s+trailer|new\s+trailer|movie\s+trailer|film\s+trailer|trailer|teaser)\b/.test(text);
   const negative=/\b(reaction|reacts|review|recap|explained|breakdown|fan\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\s+the\s+scenes|podcast|news|gameplay)\b/.test(text);
   if(INDIA_TITLE_EXCLUSIONS.test(title+" "+description)||INDIA_CHANNEL_EXCLUSIONS.test(channelTitle))return false;
-  if(!HOLLYWOOD_CHANNELS.test(channelTitle))return false;
   return positive&&!negative;
 }
 function scoreVideo(v:TrendingVideo,cfg:TrendingConfig){
@@ -135,19 +133,22 @@ async function discover(cfg:TrendingConfig){
   const key=process.env.YOUTUBE_API_KEY;
   if(!key)throw providerError("YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_API_KEY is not configured on the backend.");
   const year=new Date().getUTCFullYear();
-  const queryBase=cfg.discoveryQueries[queryCursor%cfg.discoveryQueries.length];
-  const order=cfg.discoveryOrders[queryCursor%cfg.discoveryOrders.length];
-  queryCursor=(queryCursor+1)%Math.max(cfg.discoveryQueries.length,cfg.discoveryOrders.length);
-  const query=queryBase.replace(/\b20\d{2}\b/g,String(year));
+  const discoveryPairs=[
+    {query:"new movie trailer",order:"date"},
+    {query:"upcoming movie trailer",order:"date"},
+    {query:"trending movie trailer",order:"viewCount"},
+    {query:"popular movie trailer",order:"viewCount"},
+    {query:"official movie trailer",order:"relevance"}
+  ];
+  const pair=discoveryPairs[queryCursor%discoveryPairs.length];
+  queryCursor=(queryCursor+1)%discoveryPairs.length;
+  const query=pair.query.replace(/\b20\d{2}\b/g,String(year));
+  const searches=discoveryPairs.slice(0,Math.min(5,discoveryPairs.length));
   const publishedAfter=new Date(Date.now()-cfg.freshnessDays*86400000).toISOString();
   const searchUrl=new URL("https://www.googleapis.com/youtube/v3/search");
-  searchUrl.searchParams.set("part","snippet");searchUrl.searchParams.set("type","video");searchUrl.searchParams.set("videoEmbeddable","true");
-  searchUrl.searchParams.set("order",order);searchUrl.searchParams.set("regionCode",cfg.regionCode);
-  searchUrl.searchParams.set("relevanceLanguage",cfg.relevanceLanguage);searchUrl.searchParams.set("maxResults",String(Math.min(50,cfg.maxCandidates)));
-  searchUrl.searchParams.set("publishedAfter",publishedAfter);searchUrl.searchParams.set("q",query);searchUrl.searchParams.set("key",key);
-  const search:any=await youtubeRequest(searchUrl,"YouTube trailer search");
-  const ids=[...new Set((Array.isArray(search.items)?search.items:[]).map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean))].slice(0,50);
-  console.log("[trending] YouTube discovery",{operation:"search",query,order,resultCount:ids.length});
+  const searchResults=await Promise.all(searches.map(async pair=>{const url=new URL(searchUrl);url.searchParams.set("part","snippet");url.searchParams.set("type","video");url.searchParams.set("videoEmbeddable","true");url.searchParams.set("order",pair.order);if(cfg.regionCode)url.searchParams.set("regionCode",cfg.regionCode);url.searchParams.set("relevanceLanguage",cfg.relevanceLanguage);url.searchParams.set("maxResults",String(Math.min(25,Math.max(10,Math.ceil(cfg.maxCandidates/searches.length)))));url.searchParams.set("publishedAfter",publishedAfter);url.searchParams.set("q",pair.query.replace(/\b20\d{2}\b/g,String(year)));url.searchParams.set("key",key);return youtubeRequest(url,"YouTube trailer search")}));
+  const ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[])].slice(0,50);
+  console.log("[trending] YouTube discovery",{operation:"search",queries:searches.map(x=>x.query),orders:searches.map(x=>x.order),region:cfg.regionCode||"GLOBAL",resultCount:ids.length});
   if(!ids.length)throw providerError("NO_VALID_TRAILER","YouTube returned no trailer candidates.");
   const detailUrl=new URL("https://www.googleapis.com/youtube/v3/videos");
   detailUrl.searchParams.set("part","snippet,contentDetails,status,statistics");detailUrl.searchParams.set("id",ids.join(","));detailUrl.searchParams.set("key",key);
