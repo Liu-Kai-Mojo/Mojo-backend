@@ -59,7 +59,7 @@ async function config():Promise<TrendingConfig>{
   const rawOrders=(values[13]??env.TRENDING_DISCOVERY_ORDERS??"date|viewCount|relevance").split("|").map(v=>v.trim()).filter(v=>["date","viewCount","relevance"].includes(v));
   return {
     enabled:(values[0]??env.TRENDING_VIDEOS_ENABLED??"true").toLowerCase()!=="false",
-    regionCode:((values[1]??env.YOUTUBE_REGION_CODE??env.TRENDING_REGION_CODE??"").trim().toUpperCase()==="MM"?"":(values[1]??env.YOUTUBE_REGION_CODE??env.TRENDING_REGION_CODE??"").trim().toUpperCase()),
+    regionCode:"",
     relevanceLanguage:(values[2]??env.YOUTUBE_RELEVANCE_LANGUAGE??"en").trim(),
     cacheTtlMs:numberSetting(values[3]??env.TRAILER_CACHE_TTL??env.TRENDING_CACHE_TTL_MINUTES,60)*60_000,
     poolSize:Math.max(10,Math.min(50,Math.floor(numberSetting(values[4]??env.TRENDING_POOL_SIZE,30,1)))),
@@ -116,60 +116,6 @@ function rank(pool:TrendingVideo[],cfg:TrendingConfig){
   }
   return [...map.values()].sort((a,b)=>(b.score??0)-(a.score??0)).slice(0,cfg.poolSize);
 }
-async function tmdbRequest(path:string,operation:string){
-  const token=String(process.env.TMDB_API_READ_TOKEN||"").trim();
-  if(!token)throw providerError("TMDB_NOT_CONFIGURED","TMDB_API_READ_TOKEN is not configured on the backend.");
-  let response:Response;
-  try{
-    response=await fetch("https://api.themoviedb.org/3"+path,{headers:{Authorization:"Bearer "+token,Accept:"application/json"},signal:AbortSignal.timeout(9000)});
-  }catch(error){
-    if(error instanceof Error&&error.name==="TimeoutError")throw providerError("TMDB_TIMEOUT",operation+" timed out.");
-    throw providerError("TMDB_SERVICE_UNAVAILABLE",operation+" could not be reached.");
-  }
-  if(!response.ok){
-    if(response.status===401||response.status===403)throw providerError("TMDB_AUTH_ERROR","TMDB authentication failed.");
-    if(response.status===429)throw providerError("TMDB_RATE_LIMIT","TMDB rate limit was reached.");
-    if(response.status>=500)throw providerError("TMDB_SERVICE_UNAVAILABLE","TMDB is temporarily unavailable.");
-    throw providerError("TMDB_UNKNOWN_ERROR","TMDB returned an unexpected response.");
-  }
-  return response.json() as Promise<any>;
-}
-async function discoverFromTmdb(cfg:TrendingConfig){
-  const data:any=await tmdbRequest("/trending/movie/week?language=en-US","TMDB movie discovery");
-  const movies=Array.isArray(data?.results)?data.results.filter((m:any)=>m?.id).slice(0,12):[];
-  const candidates:TrendingVideo[]=[];
-  for(const movie of movies){
-    try{
-      const details:any=await tmdbRequest("/movie/"+encodeURIComponent(String(movie.id))+"/videos?language=en-US","TMDB movie video discovery");
-      const videos=Array.isArray(details?.results)?details.results:[];
-      const video=videos.find((v:any)=>v?.site==="YouTube"&&v?.key&&/trailer|teaser/i.test(String(v?.type||""))&&String(v?.official)!=="false")
-        ||videos.find((v:any)=>v?.site==="YouTube"&&v?.key&&/trailer|teaser/i.test(String(v?.type||"")));
-      if(!video)continue;
-      const published=String(video.published_at||movie.release_date||new Date().toISOString());
-      const title=movieTitle(String(movie.title||video.name||"Movie"));
-      const posterPath=String(movie.poster_path||"");
-      const thumb=posterPath?"https://image.tmdb.org/t/p/w780"+posterPath:"https://i.ytimg.com/vi/"+encodeURIComponent(String(video.key))+"/hqdefault.jpg";
-      candidates.push({
-        provider:"youtube",
-        videoId:String(video.key),
-        title,
-        description:String(movie.overview||video.name||""),
-        channelId:"",
-        channelTitle:String(video.name||"Official trailer"),
-        thumbnailUrl:thumb,
-        durationSeconds:180,
-        publishedAt:published,
-        categoryId:"movie",
-        viewCount:0,
-        likeCount:0,
-        commentCount:0,
-        liveBroadcastContent:"none"
-      });
-    }catch(error){console.warn("[trending] TMDB movie video lookup failed",String(movie.id),(error as any)?.code||"UNKNOWN");}
-  }
-  const ranked=rank(candidates.map(v=>({...v,title:v.title+" Official Trailer"})),cfg);
-  return ranked.map(v=>({...v,title:movieTitle(v.title)}));
-}
 async function youtubeRequest(url:URL,operation:string){
   let response:Response;
   try{response=await fetch(url,{signal:AbortSignal.timeout(9000)});}
@@ -187,83 +133,113 @@ async function youtubeRequest(url:URL,operation:string){
   return response.json() as Promise<any>;
 }
 async function discover(cfg:TrendingConfig){
-  const key=process.env.YOUTUBE_API_KEY;
+  const key=String(process.env.YOUTUBE_API_KEY||"").trim();
   if(!key)throw providerError("YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_API_KEY is not configured on the backend.");
-  const year=new Date().getUTCFullYear();
-  const discoveryPairs=[
-    {query:"new movie trailer",order:"date"},
-    {query:"upcoming movie trailer",order:"date"},
-    {query:"trending movie trailer",order:"viewCount"},
-    {query:"popular movie trailer",order:"viewCount"},
-    {query:"official movie trailer",order:"relevance"}
-  ];
-  const pair=discoveryPairs[queryCursor%discoveryPairs.length];
-  queryCursor=(queryCursor+1)%discoveryPairs.length;
+
+  // YouTube's search.list API has a strict daily quota. Use one carefully
+  // chosen query per refresh and only fall back when the first query returns
+  // no usable candidates. Region is intentionally global (no regionCode).
+  const configuredQueries=cfg.discoveryQueries.filter(Boolean);
+  const queries=(configuredQueries.length?configuredQueries:[
+    "Hollywood movie official trailer",
+    "new Hollywood movie trailer",
+    "upcoming Hollywood movie trailer",
+    "popular Hollywood movie trailer"
+  ]).map(q=>q.replace(/\\b20\\d{2}\\b/g,String(new Date().getUTCFullYear())).trim());
+  const orders=cfg.discoveryOrders.length?cfg.discoveryOrders:["relevance"];
   const searchUrl=new URL("https://www.googleapis.com/youtube/v3/search");
-  const searchResults:any[]=[];
-  const searchPair=async (p:{query:string;order:string}, useFreshness:boolean)=>{
+
+  const collectSearch=async(query:string,order:string)=>{
     const url=new URL(searchUrl);
     url.searchParams.set("part","snippet");
     url.searchParams.set("type","video");
     url.searchParams.set("videoEmbeddable","true");
-    url.searchParams.set("order",p.order);
-    if(cfg.regionCode)url.searchParams.set("regionCode",cfg.regionCode);
-    url.searchParams.set("relevanceLanguage",cfg.relevanceLanguage);
+    // Relevance is more reliable than date/view-count sorting when combined
+    // with search filters; use configured order only when it is relevance.
+    url.searchParams.set("order",order==="relevance"?"relevance":"relevance");
+    url.searchParams.set("relevanceLanguage","en");
     url.searchParams.set("maxResults",String(Math.min(25,Math.max(10,cfg.maxCandidates))));
-    if(useFreshness)url.searchParams.set("publishedAfter",new Date(Date.now()-cfg.freshnessDays*86400000).toISOString());
-    url.searchParams.set("q",p.query.replace(/\b20\d{2}\b/g,String(year)));
+    url.searchParams.set("q",query);
     url.searchParams.set("key",key);
     return youtubeRequest(url,"YouTube trailer search");
   };
-  const first=await searchPair(pair,true);
-  searchResults.push(first);
-  let ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
-  console.log("[trending] YouTube discovery",{operation:"search",query:pair.query,order:pair.order,region:cfg.regionCode||"GLOBAL",resultCount:ids.length});
-  if(!ids.length){
-    const fallback=await searchPair(pair,false);
-    searchResults.push(fallback);
-    ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
-    console.log("[trending] YouTube discovery fallback",{query:pair.query,resultCount:ids.length});
+
+  const searchResults:any[]=[];
+  let ids:string[]=[];
+  let selectedQuery="";
+  for(let i=0;i<queries.length&&i<4;i++){
+    const query=queries[i];
+    const result=await collectSearch(query,orders[i%orders.length]);
+    searchResults.push(result);
+    ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)
+      ?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
+    console.log("[trending] YouTube discovery",{
+      operation:"search",
+      query,
+      order:"relevance",
+      region:"GLOBAL",
+      resultCount:ids.length
+    });
+    if(ids.length){selectedQuery=query;break;}
   }
-  if(!ids.length)throw providerError("NO_VALID_TRAILER","YouTube returned no trailer candidates.");
+
+  if(!ids.length)throw providerError("NO_VALID_TRAILER","YouTube returned no movie trailer candidates.");
+
   const detailUrl=new URL("https://www.googleapis.com/youtube/v3/videos");
-  detailUrl.searchParams.set("part","snippet,contentDetails,status,statistics");detailUrl.searchParams.set("id",ids.join(","));detailUrl.searchParams.set("key",key);
+  detailUrl.searchParams.set("part","snippet,contentDetails,status,statistics");
+  detailUrl.searchParams.set("id",ids.join(","));
+  detailUrl.searchParams.set("key",key);
   const details:any=await youtubeRequest(detailUrl,"YouTube video validation");
+
   const candidates:TrendingVideo[]=[];
   for(const item of Array.isArray(details.items)?details.items:[]){
-    const snippet=item.snippet||{}, status=item.status||{}, stats=item.statistics||{}, duration=parseDuration(String(item.contentDetails?.duration||""));
+    const snippet=item.snippet||{};
+    const status=item.status||{};
+    const stats=item.statistics||{};
+    const duration=parseDuration(String(item.contentDetails?.duration||""));
     const published=String(snippet.publishedAt||"");
+    const rawTitle=String(snippet.title||"");
+    const description=String(snippet.description||"");
+    const channelTitle=String(snippet.channelTitle||"");
     if(!item.id||String(status.privacyStatus)!=="public"||status.embeddable!==true||!published)continue;
     if(cfg.freshnessDays&&Date.parse(published)<Date.now()-Math.max(cfg.freshnessDays,365)*86400000)continue;
-    if(!isLikelyTrailer(String(snippet.title||""),String(snippet.description||""),String(snippet.channelTitle||"")))continue;
+    if(!isLikelyTrailer(rawTitle,description,channelTitle))continue;
     if(duration<cfg.minDurationSeconds||(cfg.maxDurationSeconds>0&&duration>cfg.maxDurationSeconds))continue;
-    const thumb=String(snippet.thumbnails?.maxres?.url||snippet.thumbnails?.high?.url||snippet.thumbnails?.medium?.url||snippet.thumbnails?.default?.url||"");
+    const thumb=String(
+      snippet.thumbnails?.maxres?.url||
+      snippet.thumbnails?.high?.url||
+      snippet.thumbnails?.standard?.url||
+      snippet.thumbnails?.medium?.url||
+      snippet.thumbnails?.default?.url||""
+    );
     if(!thumb)continue;
-    candidates.push({provider:"youtube",videoId:String(item.id),title:movieTitle(String(snippet.title||"")),description:String(snippet.description||""),channelId:String(snippet.channelId||""),channelTitle:clean(String(snippet.channelTitle||"")),thumbnailUrl:thumb,durationSeconds:duration,publishedAt:published,categoryId:String(snippet.categoryId||""),viewCount:Number(stats.viewCount||0),likeCount:Number(stats.likeCount||0),commentCount:Number(stats.commentCount||0),liveBroadcastContent:String(snippet.liveBroadcastContent||"none")});
+    const cleanTitle=movieTitle(rawTitle);
+    if(!cleanTitle||cleanTitle==="Movie")continue;
+    candidates.push({
+      provider:"youtube",
+      videoId:String(item.id),
+      title:cleanTitle,
+      description,
+      channelId:String(snippet.channelId||""),
+      channelTitle:clean(channelTitle),
+      thumbnailUrl:thumb,
+      durationSeconds:duration,
+      publishedAt:published,
+      categoryId:String(snippet.categoryId||""),
+      viewCount:Number(stats.viewCount||0),
+      likeCount:Number(stats.likeCount||0),
+      commentCount:Number(stats.commentCount||0),
+      liveBroadcastContent:String(snippet.liveBroadcastContent||"none")
+    });
   }
-  let finalPool=rank(candidates,cfg);
-  if(!finalPool.length){
-    const fallbackPair=discoveryPairs[(queryCursor+1)%discoveryPairs.length];
-    const fallback=await searchPair(fallbackPair,false);
-    const fallbackIds=[...new Set(Array.isArray(fallback.items)?fallback.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[])].slice(0,50);
-    if(fallbackIds.length){
-      detailUrl.searchParams.set("id",fallbackIds.join(","));
-      const fallbackDetails:any=await youtubeRequest(detailUrl,"YouTube fallback video validation");
-      for(const item of Array.isArray(fallbackDetails.items)?fallbackDetails.items:[]){
-        const snippet=item.snippet||{}, status=item.status||{}, stats=item.statistics||{}, duration=parseDuration(String(item.contentDetails?.duration||""));
-        const published=String(snippet.publishedAt||"");
-        if(!item.id||String(status.privacyStatus)!=="public"||status.embeddable!==true||!published)continue;
-        if(!isLikelyTrailer(String(snippet.title||""),String(snippet.description||""),String(snippet.channelTitle||"")))continue;
-        if(duration<cfg.minDurationSeconds||(cfg.maxDurationSeconds>0&&duration>cfg.maxDurationSeconds))continue;
-        const thumb=String(snippet.thumbnails?.maxres?.url||snippet.thumbnails?.high?.url||snippet.thumbnails?.medium?.url||snippet.thumbnails?.default?.url||"");
-        if(!thumb)continue;
-        candidates.push({provider:"youtube",videoId:String(item.id),title:movieTitle(String(snippet.title||"")),description:String(snippet.description||""),channelId:String(snippet.channelId||""),channelTitle:clean(String(snippet.channelTitle||"")),thumbnailUrl:thumb,durationSeconds:duration,publishedAt:published,categoryId:String(snippet.categoryId||""),viewCount:Number(stats.viewCount||0),likeCount:Number(stats.likeCount||0),commentCount:Number(stats.commentCount||0),liveBroadcastContent:String(snippet.liveBroadcastContent||"none")});
-      }
-      finalPool=rank(candidates,cfg);
-    }
-  }
-  console.log("[trending] YouTube validation",{candidateCount:candidates.length,validatedCount:finalPool.length});
-  if(!finalPool.length)throw providerError("NO_VALID_TRAILER","No valid embeddable movie trailer was found.");
+
+  const finalPool=rank(candidates,cfg);
+  console.log("[trending] YouTube validation",{
+    query:selectedQuery,
+    candidateCount:candidates.length,
+    validatedCount:finalPool.length
+  });
+  if(!finalPool.length)throw providerError("NO_VALID_TRAILER","No valid embeddable Hollywood movie trailer was found.");
   return finalPool;
 }
 async function writeCache(pool:TrendingVideo[],cfg:TrendingConfig){
@@ -306,10 +282,6 @@ export async function getTrendingVideoForClient(clientId:string){
   catch(error){
     const stale=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public"},orderBy:{score:"desc"},take:cfg.poolSize});
     const validatedStale=stale.filter(row=>isLikelyTrailer(row.title,row.description,row.channelTitle));if(validatedStale.length)return select(clientId,validatedStale.map(fromCache),cfg);
-    try{
-      const tmdbPool=await discoverFromTmdb(cfg);
-      if(tmdbPool.length){await writeCache(tmdbPool,cfg);return select(clientId,tmdbPool,cfg);}
-    }catch(fallbackError){console.error("[trending] TMDB fallback failed",(fallbackError as any)?.code||"UNKNOWN");}
     throw error;
   }
 }
@@ -319,13 +291,7 @@ export async function getCurrentTrailerCandidates(){
   if(pool.length)return pool;
   const stale=await loadCache(cfg,true);
   if(stale.length){void refresh(cfg).catch(()=>{});return stale;}
-  try{return await refresh(cfg);}catch{
-    try{
-      const tmdbPool=await discoverFromTmdb(cfg);
-      if(tmdbPool.length){await writeCache(tmdbPool,cfg);return tmdbPool;}
-    }catch(error){console.error("[trending] TMDB candidate fallback failed",(error as any)?.code||"UNKNOWN");}
-    return [];
-  }
+  try{return await refresh(cfg);}catch{return [];}
 }
 export async function warmTrendingVideoCache(){
   const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0};
