@@ -308,6 +308,7 @@ export async function getTrendingVideosForClient(clientId:string,count:number){
   catch(error){const fallback=await loadCache(cfg,true);if(fallback.length)return selectMany(clientId,fallback,count,cfg);throw error;}
 }
 export async function getTrendingVideoForClient(clientId:string){return (await getTrendingVideosForClient(clientId,1))[0];}
+export async function getAlternativeVideoForTask(clientId:string,movieId:string|null,excludeVideoId:string|null){const cfg=await config();await ensureVerifiedHollywoodCache();const pool=await loadCache(cfg);const sameMovie=pool.filter(v=>(!movieId||v.movieId===movieId)&&v.videoId!==excludeVideoId);if(sameMovie.length)return selectMany(clientId,sameMovie,1,cfg)[0];const fallback=pool.filter(v=>v.videoId!==excludeVideoId);if(fallback.length)return selectMany(clientId,fallback,1,cfg)[0];return getTrendingVideoForClient(clientId);}
 export async function getCurrentTrailerCandidates(){
   const cfg=await config();if(!cfg.enabled)return [];
   return loadCache(cfg,true);
