@@ -114,7 +114,6 @@ async function randomTaskAmount(balanceCents:number,frozenCents=0){
   if(currentBalance<=0||safeMax<safeMin)return null;
   return secureRandomCents(safeMin,safeMax);
 }
-}
 async function upsertDefaultTaskPriceSettings(){
   const defaults:{key:string;value:string}[]=[
     {key:"task_price_min_percent",value:"6"},
