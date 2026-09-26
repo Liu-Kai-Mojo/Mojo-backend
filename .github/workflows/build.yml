@@ -1,5 +1,6 @@
 name: build
 # CI verification
+# Hollywood discovery verification
 on:
   workflow_dispatch:
   push:
