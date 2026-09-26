@@ -79,7 +79,7 @@ function parseDuration(value:string){
   return m?Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0):0;
 }
 function clean(value:string){return value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();}
-function movieTitle(value:string){return clean(value).replace(/\s*[|–—:-]\s*(?:the\s+)?(?:official\s+)?(?:final\s+)?(?:movie\s+)?(?:official\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?$/i,"").replace(/\s*\((?:official\s+)?(?:final\s+)?(?:trailer|teaser)\)$/i,"").replace(/\s+\b(?:official|new|latest|final)\s+trailer\b.*$/i,"").trim() || clean(value);}
+function movieTitle(value:string){const raw=clean(value).replace(/\s+/g," ");if(!raw)return "Movie";return raw.replace(/\s*[|–—:-]\s*(?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+|movie\s+)*(?:official\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?$/i,"").replace(/\s*\((?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?\)$/i,"").replace(/\s+\b(?:official|new|latest|exclusive|final)\s+(?:trailer|teaser)\b.*$/i,"").replace(/\s*[-–—|]+\s*$/,"").trim()||raw;}
 const DEFAULT_INDIA_TITLE_EXCLUSIONS="";
 const DEFAULT_INDIA_CHANNEL_EXCLUSIONS="";
 
