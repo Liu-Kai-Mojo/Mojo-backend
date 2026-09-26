@@ -9,7 +9,7 @@ import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
-import { getTrendingVideoForClient, getTrendingVideosForClient, getCurrentTrailerCandidates, trendingConfig, normalizeMovieTitle } from "./trending.js";
+import { getTrendingVideoForClient, getTrendingVideosForClient, getAlternativeVideoForTask, getCurrentTrailerCandidates, trendingConfig, normalizeMovieTitle } from "./trending.js";
 
 const app=express();
 app.set("trust proxy",1);
@@ -317,7 +317,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
     const amount=await randomTaskAmount(user.balanceCents,user.frozenCents);
     if(amount===null)return res.status(409).json({error:"Your balance is too low to start this task. Please add funds before continuing."});
     try{
-      const video=await getTrendingVideoForClient(clientId);
+      const video=await getAlternativeVideoForTask(clientId,task.movieId||null,task.videoId||null);
       updated=await prisma.task.update({where:{id},data:{
         amountCents:amount,commissionCents:defaultCommission(amount,user.balanceCents),revealedAt:new Date(),
         videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
