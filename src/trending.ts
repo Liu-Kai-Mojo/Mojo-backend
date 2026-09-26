@@ -167,7 +167,8 @@ async function discoverFromTmdb(cfg:TrendingConfig){
       });
     }catch(error){console.warn("[trending] TMDB movie video lookup failed",String(movie.id),(error as any)?.code||"UNKNOWN");}
   }
-  return rank(candidates,cfg);
+  const ranked=rank(candidates.map(v=>({...v,title:v.title+" Official Trailer"})),cfg);
+  return ranked.map(v=>({...v,title:movieTitle(v.title)}));
 }
 async function youtubeRequest(url:URL,operation:string){
   let response:Response;
