@@ -154,6 +154,15 @@ async function upsertDefaultTaskPriceSettings(){
   ];
   for(const item of defaults)await prisma.setting.upsert({where:{key:item.key},create:{id:await uniqueSettingId(),key:item.key,value:item.value},update:{}});
 }
+async function upsertDefaultVipRules(){
+  const defaults:[string,VipRule][]=[
+    ["VIP1",{taskCount:30,commissionRateBps:70}],
+    ["VIP2",{taskCount:40,commissionRateBps:80}],
+    ["VIP3",{taskCount:50,commissionRateBps:90}],
+    ["VIP4",{taskCount:60,commissionRateBps:100}]
+  ];
+  for(const [vip,rule] of defaults)await prisma.setting.upsert({where:{key:vipRuleKey(vip)},create:{id:await uniqueSettingId(),key:vipRuleKey(vip),value:JSON.stringify(rule)},update:{}});
+}
 function taskPublic(t:any,includeValues=false){
   const completed=String(t.status||"")===TaskStatus.COMPLETED;
   const hasAssignedVideo=Boolean(t.videoId);
@@ -617,6 +626,6 @@ void warmTrendingVideoCache().catch(()=>{});},5*60_000);trendingWarmup.unref();
 void warmTrendingVideoCache().catch(()=>{});
 
 function runMigrations(){return new Promise<void>((resolve,reject)=>{const args=["prisma","migrate","deploy","--schema=prisma/schema.prisma"];migrationProcess=execFile(process.platform==="win32"?(process.env.ComSpec||"cmd.exe"):"npx",process.platform==="win32"?["/d","/s","/c","npx "+args.join(" ")]:args,{cwd:process.cwd(),env:process.env,windowsHide:true},(error,stdout,stderr)=>{migrationProcess=null;if(stdout.trim())console.log(stdout.trim());if(stderr.trim())console.error(stderr.trim());error?reject(error):resolve();});});}
-async function runMigrationsUntilReady(){let delay=2000;while(!applicationReady){try{await runMigrations();await prisma.$queryRaw`SELECT 1`;await ensureOwnerFromEnv();applicationReady=true;console.log("Database ready.");}catch(e){console.error(`Database/migration startup failed; retrying in ${Math.ceil(delay/1000)}s`,e);await new Promise(r=>setTimeout(r,delay));delay=Math.min(delay*2,30000);}}}
+async function runMigrationsUntilReady(){let delay=2000;while(!applicationReady){try{await runMigrations();await prisma.$queryRaw`SELECT 1`;await ensureOwnerFromEnv();await upsertDefaultTaskPriceSettings();await upsertDefaultVipRules();applicationReady=true;console.log("Database ready.");}catch(e){console.error(`Database/migration startup failed; retrying in ${Math.ceil(delay/1000)}s`,e);await new Promise(r=>setTimeout(r,delay));delay=Math.min(delay*2,30000);}}}
 async function shutdown(signal:string){console.log(`${signal} received.`);if(migrationProcess) migrationProcess.kill();await prisma.$disconnect();server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),10000);}
 process.on("SIGINT",()=>void shutdown("SIGINT"));process.on("SIGTERM",()=>void shutdown("SIGTERM"));
