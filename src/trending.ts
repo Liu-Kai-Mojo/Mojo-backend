@@ -161,7 +161,7 @@ async function discover(cfg:TrendingConfig){
     url.searchParams.set("key",key);
     return youtubeRequest(url,"YouTube trailer search");
   }));
-  const ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[])].slice(0,50);
+  const ids=[...new Set(searchResults.flatMap((search:any)=>Array.isArray(search.items)?search.items.map((x:any)=>String(x?.id?.videoId||"")).filter(Boolean):[]))].slice(0,50);
   console.log("[trending] YouTube discovery",{operation:"search",queries:searches.map(x=>x.query),orders:searches.map(x=>x.order),region:cfg.regionCode||"GLOBAL",resultCount:ids.length});
   if(!ids.length)throw providerError("NO_VALID_TRAILER","YouTube returned no trailer candidates.");
   const detailUrl=new URL("https://www.googleapis.com/youtube/v3/videos");
