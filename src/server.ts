@@ -8,8 +8,8 @@ import { z } from "zod";
 import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
-import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId } from "./utils/codes.js";
-import { getTrendingVideoForClient, getCurrentTrailerCandidates, trendingConfig, warmTrendingVideoCache } from "./trending.js";
+import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
+import { getTrendingVideoForClient, getCurrentTrailerCandidates, trendingConfig, warmTrendingVideoCache, normalizeMovieTitle } from "./trending.js";
 
 const app=express();
 app.set("trust proxy",1);
@@ -88,25 +88,34 @@ function defaultTaskAmount(balanceCents:number,_sequence:number){const available
 function taskCommissionRate(balanceCents:number){const available=Math.max(0,Number(balanceCents||0));if(available>=2000000)return .016;if(available>=500000)return .014;if(available>=150000)return .008;return .007;}
 function defaultCommission(amount:number,balanceCents:number){return Math.max(1,Math.round(Math.max(0,amount)*taskCommissionRate(balanceCents)));}
 
-type TaskManagementConfig={taskCount:number;requiredDepositCents:number;vipLevel:string;resetCount:number;cycleStartSequence:number};
+type VipRule={taskCount:number;commissionRateBps:number};
+type TaskManagementConfig={taskCount:number;requiredDepositCents:number;amountCents:number;vipLevel:string;resetCount:number;cycleStartSequence:number;combinationTaskCount:number;combinationTaskAmountCents:number;combinationCommissionRateBps:number};
 const taskConfigKey=(clientId:string)=>`client_task_config_${clientId}`;
 const taskCycleKey=(clientId:string)=>`client_task_cycle_${clientId}`;
+const vipRuleKey=(vip:string)=>`vip_rule_${vip}`;
 const clampTaskCount=(value:number)=>Math.max(1,Math.min(100,Math.trunc(Number.isFinite(value)?value:30)));
 const clampMoneyCents=(value:number)=>Math.max(0,Math.min(1_000_000_000,Math.trunc(Number.isFinite(value)?value:0)));
+const clampRateBps=(value:number)=>Math.max(1,Math.min(10000,Math.trunc(Number.isFinite(value)?value:70)));
 const normalizeVipLevel=(value:unknown)=>{const raw=String(value??"VIP1").trim().toUpperCase();return /^VIP[0-9]{1,2}$/.test(raw)?raw:"VIP1";};
+function defaultVipRule(vip:string):VipRule{
+  const n=Math.max(1,Math.min(100,Number(String(vip).replace(/\\D/g,""))||1));
+  return {taskCount:n===1?30:n===2?40:n===3?50:n===4?60:60,commissionRateBps:n===1?70:n===2?80:n===3?90:100};
+}
+async function getVipRule(vipInput:unknown):Promise<VipRule>{
+  const vip=normalizeVipLevel(vipInput);const fallback=defaultVipRule(vip);
+  const row=await prisma.setting.findUnique({where:{key:vipRuleKey(vip)}});
+  if(!row)return fallback;
+  try{const parsed=JSON.parse(row.value||"{}");return {taskCount:clampTaskCount(Number(parsed.taskCount??fallback.taskCount)),commissionRateBps:clampRateBps(Number(parsed.commissionRateBps??fallback.commissionRateBps))};}catch{return fallback;}
+}
 async function getTaskManagementConfig(clientId:string):Promise<TaskManagementConfig>{
-  const [configRow,cycleRow,tasks]=await Promise.all([prisma.setting.findUnique({where:{key:taskConfigKey(clientId)}}),prisma.setting.findUnique({where:{key:taskCycleKey(clientId)}}),prisma.task.findMany({where:{clientId},orderBy:{sequence:"asc"},select:{sequence:true}})]);
+  const [configRow,cycleRow]=await Promise.all([prisma.setting.findUnique({where:{key:taskConfigKey(clientId)}}),prisma.setting.findUnique({where:{key:taskCycleKey(clientId)}})]);
   let parsed:any={};try{parsed=configRow?.value?JSON.parse(configRow.value):{};}catch{}
-  const inferredStart=tasks.length?Math.max(1,Math.min(...tasks.map(t=>t.sequence))):1;
-  return {taskCount:clampTaskCount(Number(parsed.taskCount??30)),requiredDepositCents:clampMoneyCents(Number(parsed.requiredDepositCents??0)),vipLevel:normalizeVipLevel(parsed.vipLevel??"VIP1"),resetCount:Math.max(0,Math.min(100000,Math.trunc(Number(parsed.resetCount??0)))),cycleStartSequence:Math.max(1,Math.trunc(Number(cycleRow?.value||parsed.cycleStartSequence||inferredStart||1)))};
+  const vipLevel=normalizeVipLevel(parsed.vipLevel??"VIP1");const vipRule=await getVipRule(vipLevel);
+  return {taskCount:clampTaskCount(parsed.taskCount===undefined?vipRule.taskCount:Number(parsed.taskCount)),requiredDepositCents:clampMoneyCents(Number(parsed.requiredDepositCents??0)),amountCents:clampMoneyCents(Number(parsed.amountCents??0)),vipLevel,resetCount:Math.max(0,Math.min(100000,Math.trunc(Number(parsed.resetCount??0)))),cycleStartSequence:Math.max(1,Math.trunc(Number(cycleRow?.value||parsed.cycleStartSequence||1))),combinationTaskCount:Math.max(0,Math.min(100,Math.trunc(Number(parsed.combinationTaskCount??0)))),combinationTaskAmountCents:clampMoneyCents(Number(parsed.combinationTaskAmountCents??0)),combinationCommissionRateBps:1500};
 }
 async function saveTaskManagementConfig(db:any,clientId:string,config:TaskManagementConfig){
   await db.setting.upsert({where:{key:taskConfigKey(clientId)},create:{id:await uniqueSettingId(),key:taskConfigKey(clientId),value:JSON.stringify(config)},update:{value:JSON.stringify(config)}});
   await db.setting.upsert({where:{key:taskCycleKey(clientId)},create:{id:await uniqueSettingId(),key:taskCycleKey(clientId),value:String(config.cycleStartSequence)},update:{value:String(config.cycleStartSequence)}});
-}
-async function currentCycleTasks(clientId:string,config?:TaskManagementConfig){
-  const c=config??await getTaskManagementConfig(clientId);
-  return prisma.task.findMany({where:{clientId,sequence:{gte:c.cycleStartSequence,lt:c.cycleStartSequence+c.taskCount}},orderBy:{sequence:"asc"}});
 }
 function requiredWatchSeconds(durationSeconds:number){const configured=Number(process.env.TASK_REQUIRED_WATCH_SECONDS||2.5);const target=Number.isFinite(configured)&&configured>0?configured:2.5;return durationSeconds>0?Math.min(target,durationSeconds):target;}
 async function taskPriceConfig(){
@@ -145,28 +154,14 @@ async function upsertDefaultTaskPriceSettings(){
   ];
   for(const item of defaults)await prisma.setting.upsert({where:{key:item.key},create:{id:await uniqueSettingId(),key:item.key,value:item.value},update:{}});
 }
-async function ensureTaskBatch(clientId:string,assignedById?:string){
-  const config=await getTaskManagementConfig(clientId);
-  const existing=await currentCycleTasks(clientId,config);
-  if(existing.length>=config.taskCount)return;
-  await prisma.$transaction(async tx=>{
-    for(let i=existing.length;i<config.taskCount;i++){
-      const sequence=config.cycleStartSequence+i;
-      const found=await tx.task.findUnique({where:{clientId_sequence:{clientId,sequence}}});
-      if(found)continue;
-      await tx.task.create({data:{id:await uniqueTaskId(),clientId,assignedById,sequence,title:i===1?"Lucky combination":"Daily task",amountCents:0,commissionCents:0,isLucky:i===1}});
-    }
-    await saveTaskManagementConfig(tx,clientId,config);
-  },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
-}
 function taskPublic(t:any,includeValues=false){
   const completed=String(t.status||"")===TaskStatus.COMPLETED;
   const hasAssignedVideo=Boolean(t.videoId);
-  const movieTitle=t.movieTitle||t.videoTitle||t.title;
+  const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title));
   const moviePosterUrl=t.moviePosterUrl||t.videoThumbnailUrl||"";
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
   return {
-    id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
+    id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
     requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,
     movie:(hasAssignedVideo||t.movieTitle||t.moviePosterUrl)?{title:movieTitle,posterUrl:moviePosterUrl,releaseDate:movieReleaseDate}:null,
@@ -225,7 +220,13 @@ app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   res.json({admin:admin?{id:admin.id,name:admin.name}:null,telegramUsername:setting?.value||null});
 }));
 app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({title:v.title,videoId:v.videoId,posterUrl:v.thumbnailUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
-app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const userId=res.locals.auth.sub;await ensureTaskBatch(userId);const config=await getTaskManagementConfig(userId);const [u,tasks,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),currentCycleTasks(userId,config),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),taskConfig:{taskCount:config.taskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents},transactions:txs,messages});}));
+app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const userId=res.locals.auth.sub;const config=await getTaskManagementConfig(userId);
+  const session=await prisma.taskSession.findFirst({where:{clientId:userId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
+  const tasks=session?await prisma.task.findMany({where:{sessionId:session.id},orderBy:{sequence:"asc"}}):[];
+  const [u,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);
+  res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),taskConfig:{taskCount:session?.generatedTaskCount??config.taskCount,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents},transactions:txs,messages});
+}));
 app.get("/api/client/leaderboard",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const now=new Date();
   const day=now.getUTCDay();
@@ -255,42 +256,40 @@ app.get("/api/client/leaderboard",auth([Role.CLIENT]),asyncRoute(async(_req,res)
   res.json({weekStart:weekStart.toISOString(),entries});
 }));
 app.get("/api/client/wallet",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});const transactions=await prisma.walletTransaction.findMany({where:{userId:u.id},orderBy:{createdAt:"desc"},take:50});res.json({user:safeUser(u),transactions});}));
-app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const clientId=res.locals.auth.sub;await ensureTaskBatch(clientId);const config=await getTaskManagementConfig(clientId);const tasks=await currentCycleTasks(clientId,config);const current=tasks.find(t=>t.status===TaskStatus.PENDING)||null;res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:config.taskCount,taskConfig:{taskCount:config.taskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents}});}));
+app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const clientId=res.locals.auth.sub;const config=await getTaskManagementConfig(clientId);
+  const session=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
+  const tasks=session?await prisma.task.findMany({where:{sessionId:session.id},orderBy:{sequence:"asc"}}):[];
+  const current=tasks.find(t=>t.status===TaskStatus.PENDING&&t.revealedAt)||tasks.find(t=>t.status===TaskStatus.PENDING)||null;
+  res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:session?.generatedTaskCount??config.taskCount,taskConfig:{taskCount:session?.generatedTaskCount??config.taskCount,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents}});
+}));
 app.get("/api/client/history",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const rows=await prisma.task.findMany({where:{clientId:res.locals.auth.sub,status:TaskStatus.COMPLETED},orderBy:{completedAt:"desc"}});res.json({history:rows.map(t=>taskPublic(t,true))});}));
 app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
-  const clientId=res.locals.auth.sub;
-  const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
-  if(idempotencyKey){const prior=await prisma.task.findFirst({where:{clientId,idempotencyKey,status:TaskStatus.PENDING}});if(prior)return res.json({success:true,task:taskPublic(prior,true),idempotent:true});}
-  await ensureTaskBatch(clientId);
-  const config=await getTaskManagementConfig(clientId);
-  const cycleWhere={clientId,sequence:{gte:config.cycleStartSequence,lt:config.cycleStartSequence+config.taskCount}};
-  const active=await prisma.task.findFirst({where:{...cycleWhere,status:TaskStatus.PENDING,revealedAt:{not:null}},orderBy:{revealedAt:"asc"}});
-  if(active)return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(active,true)});
-  const task=await prisma.task.findFirst({where:{...cycleWhere,status:TaskStatus.PENDING,revealedAt:null},orderBy:{sequence:"asc"}});
-  if(!task)return res.status(409).json({success:false,error:"There are no pending tasks available right now.",code:"NO_PENDING_TASK"});
+  const clientId=res.locals.auth.sub;const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
+  const active=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
+  if(active){const pending=await prisma.task.findFirst({where:{sessionId:active.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});if(pending)return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have an active task session. Please finish the current task first.",task:taskPublic(pending,true),sessionId:active.id});await prisma.taskSession.update({where:{id:active.id},data:{status:"COMPLETED"}});}
+  if(idempotencyKey){const prior=await prisma.task.findFirst({where:{clientId,idempotencyKey}});if(prior)return res.json({success:true,task:taskPublic(prior,true),sessionId:prior.sessionId,idempotent:true});}
+  const config=await getTaskManagementConfig(clientId);const videos:any[]=[];
+  try{for(let i=0;i<config.taskCount;i++)videos.push(await getTrendingVideoForClient(clientId));}
+  catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your tasks right now. Please try again shortly.",code});}
   try{
-    const video=await getTrendingVideoForClient(clientId);
     const result=await prisma.$transaction(async tx=>{
-      const currentTask=await tx.task.findUniqueOrThrow({where:{id:task.id}});
-      if(currentTask.status!==TaskStatus.PENDING||currentTask.revealedAt)return {conflict:true,task:currentTask};
       const user=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}});
-      const amount=await randomTaskAmount(user.balanceCents,user.frozenCents);
-      if(amount===null)throw Object.assign(new Error("Your available balance is not enough to start this task. Please add funds before continuing."),{code:"LOW_BALANCE"});
-      const updated=await tx.task.update({where:{id:task.id},data:{
-        amountCents:amount,commissionCents:defaultCommission(amount,user.balanceCents),revealedAt:new Date(),
-        requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,
-        videoTitle:video.title,movieTitle:video.title,moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,
-        videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
-        videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,
-        videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",
-        idempotencyKey:idempotencyKey||null,watchAccumulatedMs:0,watchHeartbeatAt:null
-      }});
-      return {conflict:false,task:updated};
+      const available=Math.max(0,user.balanceCents-(user.frozenCents??0));if(available<=0)throw Object.assign(new Error("Your available balance is not enough to prepare tasks. Please add funds before continuing."),{code:"LOW_BALANCE"});
+      const ruleRow=await tx.setting.findUnique({where:{key:vipRuleKey(config.vipLevel)}});const fallback=defaultVipRule(config.vipLevel);let vipRule=fallback;try{if(ruleRow){const p=JSON.parse(ruleRow.value||"{}");vipRule={taskCount:clampTaskCount(Number(p.taskCount??fallback.taskCount)),commissionRateBps:clampRateBps(Number(p.commissionRateBps??fallback.commissionRateBps))};}}catch{}
+      const sessionId=await uniqueTaskSessionId();const amountCfg=await taskPriceConfig();let remainingExposure=Math.max(1,Math.min(available-amountCfg.minRemainingBalanceCents,available));const amounts:number[]=[];
+      for(let i=0;i<config.taskCount;i++){const remaining=config.taskCount-i;const configured=i<config.combinationTaskCount&&config.combinationTaskAmountCents>0?config.combinationTaskAmountCents:config.amountCents;
+        if(configured>0){if(configured>remainingExposure)throw Object.assign(new Error("The configured task amount is higher than the client's available balance."),{code:"TASK_AMOUNT_INVALID"});amounts.push(configured);remainingExposure-=configured;continue;}
+        const minPercent=Math.ceil(available*amountCfg.minPercent/100);const safeMax=Math.min(remainingExposure-(remaining-1),Math.floor(available*amountCfg.maxPercent/100),amountCfg.maxAbsoluteCents);if(safeMax<1)throw Object.assign(new Error("The current balance cannot support the configured task session."),{code:"LOW_BALANCE"});const min=Math.min(Math.max(1,minPercent),safeMax);const amount=secureRandomCents(min,safeMax);amounts.push(amount);remainingExposure-=amount;
+      }
+      const taskRows:any[]=[];for(let i=0;i<config.taskCount;i++){const video=videos[i];const combination=i<config.combinationTaskCount;const amount=amounts[i];const rateBps=combination?1500:vipRule.commissionRateBps;const commission=Math.max(1,Math.round(amount*rateBps/10000));taskRows.push(await tx.task.create({data:{id:await uniqueTaskId(),clientId,sessionId,sequence:i+1,title:normalizeMovieTitle(video.title),taskType:combination?"COMBINATION":"STANDARD",commissionRateBps:rateBps,amountCents:amount,commissionCents:commission,isLucky:combination,videoProvider:video.provider,videoId:video.videoId,videoTitle:normalizeMovieTitle(video.title),movieTitle:normalizeMovieTitle(video.title),moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:i===0&&idempotencyKey?idempotencyKey:null}}));}
+      const totalAmount=amounts.reduce((n,v)=>n+v,0);const totalCommission=taskRows.reduce((n,v)=>n+v.commissionCents,0);
+      const session=await tx.taskSession.create({data:{id:sessionId,clientId,vipLevel:config.vipLevel,balanceSnapshotCents:user.balanceCents,generatedTaskCount:config.taskCount,totalTaskAmountCents:totalAmount,totalExpectedCommissionCents:totalCommission,resetNumber:config.resetCount,taskCountOverride:config.taskCount,amountOverrideCents:config.amountCents||null,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,combinationCommissionRateBps:1500}});
+      return {session,tasks:taskRows};
     },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
-    if(result.conflict)return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(result.task,true)});
-    return res.json({success:true,task:taskPublic(result.task,true)});
-
-  }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
+    const first=await prisma.task.update({where:{id:result.tasks[0].id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchHeartbeatAt:null}});
+    return res.status(201).json({success:true,session:{id:result.session.id,vipLevel:result.session.vipLevel,balanceSnapshotCents:result.session.balanceSnapshotCents,generatedTaskCount:result.session.generatedTaskCount,resetNumber:result.session.resetNumber,totalTaskAmountCents:result.session.totalTaskAmountCents,totalExpectedCommissionCents:result.session.totalExpectedCommissionCents},tasks:result.tasks.map(t=>taskPublic(t,false)),task:taskPublic(first,true),taskConfig:{taskCount:result.session.generatedTaskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents}});
+  }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);return res.status(code==="LOW_BALANCE"||code==="TASK_AMOUNT_INVALID"?409:500).json({success:false,error:error instanceof Error?error.message:"We couldn't prepare your tasks right now. Please try again shortly.",code});}
 }));
 app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
@@ -301,7 +300,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
   const availableBalanceCents=Math.max(0,user.balanceCents-(user.frozenCents??0));
   if(!task)return res.status(404).json({error:"Task not found."});
   const config=await getTaskManagementConfig(clientId);
-  const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,sequence:{gte:config.cycleStartSequence,lt:config.cycleStartSequence+config.taskCount}},orderBy:{sequence:"asc"}});
+  const activeSession=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});const first=activeSession?await prisma.task.findFirst({where:{sessionId:activeSession.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}}):null;
   if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before opening another one."});
   let updated=task;
   if(!task.revealedAt){
@@ -381,6 +380,7 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
     if(beforeAvailable<fresh.amountCents)throw new Error("Your available balance is not enough for this task. Please add funds before finishing it.");
     const user=await tx.user.update({where:{id:clientId},data:{balanceCents:{increment:fresh.commissionCents}}});
     const completed=await tx.task.update({where:{id},data:{status:TaskStatus.COMPLETED,completedAt:new Date(),rating:d.rating??fresh.rating}});
+    if(fresh.sessionId){const pendingCount=await tx.task.count({where:{sessionId:fresh.sessionId,status:TaskStatus.PENDING}});await tx.taskSession.update({where:{id:fresh.sessionId},data:{completedTaskCount:{increment:1},status:pendingCount<=1?"COMPLETED":"ACTIVE"}});}
     await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:clientId,amountCents:fresh.commissionCents,type:"TASK_COMMISSION",note:`Task #${fresh.sequence} commission` }});
     return {user,task:completed};
   });
