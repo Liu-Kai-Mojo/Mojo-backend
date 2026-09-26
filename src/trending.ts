@@ -208,7 +208,7 @@ export async function getTrendingVideoForClient(clientId:string){
   try{return select(clientId,await refresh(cfg),cfg);}
   catch(error){
     const stale=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public"},orderBy:{score:"desc"},take:cfg.poolSize});
-    if(stale.length)return select(clientId,stale.map(fromCache),cfg);
+    const validatedStale=stale.filter(row=>isLikelyTrailer(row.title,row.description,row.channelTitle));if(validatedStale.length)return select(clientId,validatedStale.map(fromCache),cfg);
     throw error;
   }
 }
