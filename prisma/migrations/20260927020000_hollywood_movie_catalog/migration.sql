@@ -1,0 +1,40 @@
+ALTER TABLE "Movie"
+  ADD COLUMN "originalLanguage" TEXT NOT NULL DEFAULT 'en',
+  ADD COLUMN "countries" TEXT NOT NULL DEFAULT 'United States',
+  ADD COLUMN "productionCompanies" TEXT NOT NULL DEFAULT '',
+  ADD COLUMN "distributor" TEXT NOT NULL DEFAULT '',
+  ADD COLUMN "hollywoodEligible" BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE "TrailerCache"
+  ADD COLUMN "movieId" VARCHAR(5),
+  ADD COLUMN "movieTitle" TEXT,
+  ADD COLUMN "moviePosterUrl" TEXT,
+  ADD COLUMN "movieReleaseDate" TIMESTAMP(3),
+  ADD COLUMN "movieYear" INTEGER,
+  ADD COLUMN "movieGenre" TEXT,
+  ADD COLUMN "movieOriginalLanguage" TEXT,
+  ADD COLUMN "movieCountries" TEXT,
+  ADD COLUMN "movieProductionCompanies" TEXT,
+  ADD COLUMN "movieDistributor" TEXT,
+  ADD COLUMN "movieHollywoodEligible" BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE "TrailerCache" ADD CONSTRAINT "TrailerCache_movieId_fkey" FOREIGN KEY ("movieId") REFERENCES "Movie"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+UPDATE "Movie" SET "published"=false,"hollywoodEligible"=false WHERE "id" IN ('61001','61002','61003');
+
+INSERT INTO "Movie" ("id","title","genre","year","duration","rating","description","posterUrl","published","originalLanguage","countries","productionCompanies","distributor","hollywoodEligible") VALUES
+('61004','Inception','Science Fiction, Action, Thriller',2010,148,8.8,'A thief who steals corporate secrets through dream-sharing technology is given an impossible task: planting an idea.','https://commons.wikimedia.org/wiki/Special:FilePath/Inception_(2010)_theatrical_poster.jpg?width=600',true,'en','United States;United Kingdom','Warner Bros. Pictures;Legendary Pictures;Syncopy','Warner Bros. Pictures',true),
+('61005','Get Out','Horror, Mystery, Thriller',2017,104,8.0,'A young man visits his girlfriends family estate and discovers a disturbing conspiracy.','https://commons.wikimedia.org/wiki/Special:FilePath/Get_Out_poster.png?width=600',true,'en','United States','Blumhouse Productions;Monkeypaw Productions;QC Entertainment','Universal Pictures',true),
+('61006','Split','Psychological Thriller, Horror',2016,117,7.3,'Three girls are kidnapped by a man who reveals multiple distinct personalities.','https://commons.wikimedia.org/wiki/Special:FilePath/Split_(2016_film)_poster.jpg?width=600',true,'en','United States','Blumhouse Productions;Blinding Edge Pictures','Universal Pictures',true),
+('61007','Jigsaw','Horror, Mystery, Thriller',2017,92,5.7,'A new series of murders appears to follow the methods of the Jigsaw Killer.','https://commons.wikimedia.org/wiki/Special:FilePath/Jigsaw_2017_poster.jpg?width=600',true,'en','United States','Twisted Pictures','Lionsgate Films',true),
+('61008','The Dark Knight','Action, Crime, Drama',2008,152,9.0,'Batman faces a criminal mastermind who plunges Gotham into chaos.','https://commons.wikimedia.org/wiki/Special:FilePath/The_Dark_Knight_(2008_film).jpg?width=600',true,'en','United States;United Kingdom','Warner Bros. Pictures;Legendary Pictures;Syncopy','Warner Bros. Pictures',true),
+('61009','Interstellar','Science Fiction, Adventure, Drama',2014,169,8.7,'Explorers travel through a wormhole in space in search of a new home for humanity.','https://commons.wikimedia.org/wiki/Special:FilePath/Interstellar_film_poster.jpg?width=600',true,'en','United States;United Kingdom','Paramount Pictures;Warner Bros. Pictures;Syncopy;Legendary Pictures','Paramount Pictures;Warner Bros. Pictures',true),
+('61010','Jaws','Thriller, Horror, Adventure',1975,124,8.1,'A police chief, marine scientist and fisherman hunt a great white shark threatening a beach community.','https://commons.wikimedia.org/wiki/Special:FilePath/Jaws_movie_poster.jpg?width=600',true,'en','United States','Universal Pictures;The Zanuck Company','Universal Pictures',true),
+('61011','The Wizard of Oz','Fantasy, Musical, Adventure',1939,102,8.1,'Dorothy travels from Kansas into the magical land of Oz.','https://commons.wikimedia.org/wiki/Special:FilePath/Wizard_of_oz_movie_poster.jpg?width=600',true,'en','United States','Metro-Goldwyn-Mayer','Loews Cineplex Entertainment',true)
+ON CONFLICT ("id") DO UPDATE SET "title"=EXCLUDED."title","genre"=EXCLUDED."genre","year"=EXCLUDED."year","duration"=EXCLUDED."duration","rating"=EXCLUDED."rating","description"=EXCLUDED."description","posterUrl"=EXCLUDED."posterUrl","published"=EXCLUDED."published","originalLanguage"=EXCLUDED."originalLanguage","countries"=EXCLUDED."countries","productionCompanies"=EXCLUDED."productionCompanies","distributor"=EXCLUDED."distributor","hollywoodEligible"=EXCLUDED."hollywoodEligible","updatedAt"=NOW();
+
+INSERT INTO "TrailerCache" ("id","videoId","title","description","channelId","channelTitle","publishedAt","thumbnailUrl","durationSeconds","categoryId","viewCount","likeCount","commentCount","embeddable","privacyStatus","score","lastValidatedAt","lastSeenAt","movieId","movieTitle","moviePosterUrl","movieReleaseDate","movieYear","movieGenre","movieOriginalLanguage","movieCountries","movieProductionCompanies","movieDistributor","movieHollywoodEligible") VALUES
+('62001','Qwe6qXFTdgc','Inception | Digital Trailer','Official Warner Bros. Entertainment Inception promotional trailer.','','Warner Bros. Entertainment','2010-10-19T00:00:00.000Z','https://i.ytimg.com/vi/Qwe6qXFTdgc/hqdefault.jpg',180,'1',0,0,0,true,'public',100,NOW(),NOW(),'61004','Inception','https://commons.wikimedia.org/wiki/Special:FilePath/Inception_(2010)_theatrical_poster.jpg?width=600','2010-07-16T00:00:00.000Z',2010,'Science Fiction, Action, Thriller','en','United States;United Kingdom','Warner Bros. Pictures;Legendary Pictures;Syncopy','Warner Bros. Pictures',true),
+('62002','sRfnevzM9kQ','Get Out | Official Trailer','Official Universal Pictures Get Out promotional trailer.','','Universal Pictures','2016-10-04T00:00:00.000Z','https://i.ytimg.com/vi/sRfnevzM9kQ/hqdefault.jpg',150,'1',0,0,0,true,'public',99,NOW(),NOW(),'61005','Get Out','https://commons.wikimedia.org/wiki/Special:FilePath/Get_Out_poster.png?width=600','2017-02-24T00:00:00.000Z',2017,'Horror, Mystery, Thriller','en','United States','Blumhouse Productions;Monkeypaw Productions;QC Entertainment','Universal Pictures',true),
+('62003','HHnKnVUySJU','Split | Official Trailer','Official Universal Pictures Split promotional trailer.','','Universal Pictures','2016-07-27T00:00:00.000Z','https://i.ytimg.com/vi/HHnKnVUySJU/hqdefault.jpg',150,'1',0,0,0,true,'public',98,NOW(),NOW(),'61006','Split','https://commons.wikimedia.org/wiki/Special:FilePath/Split_(2016_film)_poster.jpg?width=600','2017-01-20T00:00:00.000Z',2016,'Psychological Thriller, Horror','en','United States','Blumhouse Productions;Blinding Edge Pictures','Universal Pictures',true),
+('62004','vPP6alw1vgY','Jigsaw | Official Trailer','Official Lionsgate Movies Jigsaw promotional trailer.','','Lionsgate Movies','2017-07-20T00:00:00.000Z','https://i.ytimg.com/vi/vPP6alw1vgY/hqdefault.jpg',150,'1',0,0,0,true,'public',97,NOW(),NOW(),'61007','Jigsaw','https://commons.wikimedia.org/wiki/Special:FilePath/Jigsaw_2017_poster.jpg?width=600','2017-10-27T00:00:00.000Z',2017,'Horror, Mystery, Thriller','en','United States','Twisted Pictures','Lionsgate Films',true)
+ON CONFLICT ("videoId") DO UPDATE SET "title"=EXCLUDED."title","description"=EXCLUDED."description","channelTitle"=EXCLUDED."channelTitle","publishedAt"=EXCLUDED."publishedAt","thumbnailUrl"=EXCLUDED."thumbnailUrl","durationSeconds"=EXCLUDED."durationSeconds","embeddable"=true,"privacyStatus"='public',"score"=EXCLUDED."score","lastValidatedAt"=NOW(),"lastSeenAt"=NOW(),"movieId"=EXCLUDED."movieId","movieTitle"=EXCLUDED."movieTitle","moviePosterUrl"=EXCLUDED."moviePosterUrl","movieReleaseDate"=EXCLUDED."movieReleaseDate","movieYear"=EXCLUDED."movieYear","movieGenre"=EXCLUDED."movieGenre","movieOriginalLanguage"=EXCLUDED."movieOriginalLanguage","movieCountries"=EXCLUDED."movieCountries","movieProductionCompanies"=EXCLUDED."movieProductionCompanies","movieDistributor"=EXCLUDED."movieDistributor","movieHollywoodEligible"=EXCLUDED."movieHollywoodEligible";
