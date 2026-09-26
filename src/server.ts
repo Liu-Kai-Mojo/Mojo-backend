@@ -132,18 +132,29 @@ async function ensureTaskBatch(clientId:string,assignedById?:string){
   await prisma.$transaction(async tx=>{for(let i=count+1;i<=30;i++){await tx.task.create({data:{id:await uniqueTaskId(),clientId,assignedById,sequence:i,title:i===2?"Lucky combination":"Daily task",amountCents:0,commissionCents:0,isLucky:i===2}});}});
 }
 function taskPublic(t:any,includeValues=false){
+  const completed=String(t.status||"")===TaskStatus.COMPLETED;
+  const hasAssignedVideo=Boolean(t.videoId);
+  const movieTitle=t.movieTitle||t.videoTitle||t.title;
+  const moviePosterUrl=t.moviePosterUrl||t.videoThumbnailUrl||"";
+  const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
   return {
     id:t.id,sequence:t.sequence,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
     requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,
-    movie:t.videoId?{title:t.videoTitle||t.title,posterUrl:t.videoThumbnailUrl||"",releaseDate:t.videoPublishedAt||null}:null,
-    video:t.videoId?{
-      provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||t.title,
-      channelId:t.videoChannelId||"",channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||"",
+    movie:(hasAssignedVideo||t.movieTitle||t.moviePosterUrl)?{title:movieTitle,posterUrl:moviePosterUrl,releaseDate:movieReleaseDate}:null,
+    video:hasAssignedVideo?{
+      provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||movieTitle,
+      channelId:t.videoChannelId||"",channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||moviePosterUrl,
       durationSeconds:t.videoDurationSeconds??0,publishedAt:t.videoPublishedAt,categoryId:t.videoCategoryId||"",
       viewCount:t.videoViewCount??0,likeCount:t.videoLikeCount??0,commentCount:t.videoCommentCount??0,liveBroadcastContent:t.videoLiveBroadcastContent||"none"
     }:null,
-    ...(includeValues?{amountCents:t.amountCents,commissionCents:t.commissionCents,movieTitle:t.videoTitle||t.title,trailerTitle:t.videoTitle||t.title,thumbnail:t.videoThumbnailUrl||"",channel:t.videoChannelTitle||"",publishedAt:t.videoPublishedAt||null,duration:t.videoDurationSeconds??0,price:t.amountCents,commission:t.commissionCents}: {})
+    ...((includeValues||completed||t.revealedAt)?{
+      amountCents:Math.max(0,Number(t.amountCents||0)),
+      commissionCents:Math.max(0,Number(t.commissionCents||0)),
+      movieTitle, trailerTitle:t.videoTitle||movieTitle, thumbnail:moviePosterUrl,
+      channel:t.videoChannelTitle||"",publishedAt:t.videoPublishedAt||movieReleaseDate,duration:t.videoDurationSeconds??0,
+      price:Math.max(0,Number(t.amountCents||0)),commission:Math.max(0,Number(t.commissionCents||0))
+    }: {})
   };
 }
 function staffWhere(role:Role,id:string){return role===Role.OWNER?{role:Role.CLIENT}:{role:Role.CLIENT,adminId:id};}
@@ -232,7 +243,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
   if(amount===null)return res.status(409).json({success:false,error:"Your available balance is not enough to start this task. Please add funds before continuing.",code:"LOW_BALANCE"});
   try{
     const video=await getTrendingVideoForClient(clientId);const now=new Date();
-    const result=await prisma.task.updateMany({where:{id:task.id,status:TaskStatus.PENDING,revealedAt:null},data:{amountCents:amount,commissionCents:defaultCommission(amount,availableBalanceCents),revealedAt:now,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:idempotencyKey||null,watchAccumulatedMs:0,watchHeartbeatAt:null}});
+    const result=await prisma.task.updateMany({where:{id:task.id,status:TaskStatus.PENDING,revealedAt:null},data:{amountCents:amount,commissionCents:defaultCommission(amount,availableBalanceCents),revealedAt:now,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.title,moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:idempotencyKey||null,watchAccumulatedMs:0,watchHeartbeatAt:null}});
     if(result.count===0){const claimed=await prisma.task.findFirstOrThrow({where:{id:task.id,status:TaskStatus.PENDING}});return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have a task waiting for you. Please finish it first.",task:taskPublic(claimed,true)});}
     const updated=await prisma.task.findUniqueOrThrow({where:{id:task.id}});return res.json({success:true,task:taskPublic(updated,true)});
   }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't load a movie trailer right now. Please try again shortly.",code});}
@@ -255,7 +266,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       const video=await getTrendingVideoForClient(clientId);
       updated=await prisma.task.update({where:{id},data:{
         amountCents:amount,commissionCents:defaultCommission(amount,availableBalanceCents),revealedAt:new Date(),
-        videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
+        videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.title,moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
         videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
         videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,
         videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"
