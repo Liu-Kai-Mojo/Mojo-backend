@@ -170,7 +170,7 @@ function taskPublic(t:any,includeValues=false){
   const moviePosterUrl=String(t.moviePosterUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
   return {
-    id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
+    id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,videoId:t.videoId??null,videoTitle:t.videoTitle??null,movieTitle,moviePosterUrl,videoThumbnailUrl:t.videoThumbnailUrl??null,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
     requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,
     movie:(hasAssignedVideo||t.movieTitle||t.moviePosterUrl)?{title:movieTitle,posterUrl:moviePosterUrl,releaseDate:movieReleaseDate}:null,
