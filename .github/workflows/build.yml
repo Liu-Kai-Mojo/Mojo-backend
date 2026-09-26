@@ -1,4 +1,5 @@
 name: build
+# CI verification
 on:
   workflow_dispatch:
   push:
