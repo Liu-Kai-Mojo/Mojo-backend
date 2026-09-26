@@ -270,7 +270,7 @@ app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,
   const task=await prisma.task.findFirst({where:{id,clientId,status:TaskStatus.PENDING}});
   if(!task||!task.revealedAt||!task.videoId)return res.status(404).json({error:"Task not found."});
   const now=new Date();const previous=task.watchHeartbeatAt;let accumulated=task.watchAccumulatedMs||0;
-  if(d.playing&&previous){accumulated=Math.min(600000,accumulated+Math.max(0,Math.min(1500,now.getTime()-previous.getTime())));}
+  if(previous){accumulated=Math.min(600000,accumulated+Math.max(0,Math.min(1500,now.getTime()-previous.getTime())));}
   const updated=await prisma.task.update({where:{id},data:{watchAccumulatedMs:accumulated,watchHeartbeatAt:d.playing?now:null}});
   res.json({success:true,watchSeconds:updated.watchAccumulatedMs/1000,requiredWatchSeconds:updated.requiredWatchSeconds});
 }));
