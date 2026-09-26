@@ -227,6 +227,21 @@ async function selectMany(clientId:string,pool:TrendingVideo[],count:number,cfg:
   return selected;
 }
 async function select(clientId:string,pool:TrendingVideo[],cfg:TrendingConfig){return (await selectMany(clientId,pool,1,cfg))[0];}
+const VERIFIED_HOLLYWOOD_CACHE_KEY="hollywood_verified_cache_v1";
+const VERIFIED_HOLLYWOOD_VIDEOS=[
+  {id:"62001",videoId:"Qwe6qXFTdgc",title:"Inception | Digital Trailer",channelTitle:"Warner Bros. Entertainment",publishedAt:"2010-10-19T00:00:00.000Z",thumbnailUrl:"https://i.ytimg.com/vi/Qwe6qXFTdgc/hqdefault.jpg",durationSeconds:180,movieId:"61004",movieTitle:"Inception",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Inception_(2010)_theatrical_poster.jpg?width=600",movieReleaseDate:"2010-07-16T00:00:00.000Z",movieYear:2010,movieGenre:"Science Fiction, Action, Thriller",movieOriginalLanguage:"en",movieCountries:"United States;United Kingdom",movieProductionCompanies:"Warner Bros. Pictures;Legendary Pictures;Syncopy",movieDistributor:"Warner Bros. Pictures",score:100},
+  {id:"62002",videoId:"sRfnevzM9kQ",title:"Get Out | Official Trailer",channelTitle:"Universal Pictures",publishedAt:"2016-10-04T00:00:00.000Z",thumbnailUrl:"https://i.ytimg.com/vi/sRfnevzM9kQ/hqdefault.jpg",durationSeconds:150,movieId:"61005",movieTitle:"Get Out",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Get_Out_poster.png?width=600",movieReleaseDate:"2017-02-24T00:00:00.000Z",movieYear:2017,movieGenre:"Horror, Mystery, Thriller",movieOriginalLanguage:"en",movieCountries:"United States",movieProductionCompanies:"Blumhouse Productions;Monkeypaw Productions;QC Entertainment",movieDistributor:"Universal Pictures",score:99},
+  {id:"62003",videoId:"HHnKnVUySJU",title:"Split | Official Trailer",channelTitle:"Universal Pictures",publishedAt:"2016-07-27T00:00:00.000Z",thumbnailUrl:"https://i.ytimg.com/vi/HHnKnVUySJU/hqdefault.jpg",durationSeconds:150,movieId:"61006",movieTitle:"Split",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Split_(2016_film)_poster.jpg?width=600",movieReleaseDate:"2017-01-20T00:00:00.000Z",movieYear:2016,movieGenre:"Psychological Thriller, Horror",movieOriginalLanguage:"en",movieCountries:"United States",movieProductionCompanies:"Blumhouse Productions;Blinding Edge Pictures",movieDistributor:"Universal Pictures",score:98},
+  {id:"62004",videoId:"vPP6alw1vgY",title:"Jigsaw | Official Trailer",channelTitle:"Lionsgate Movies",publishedAt:"2017-07-20T00:00:00.000Z",thumbnailUrl:"https://i.ytimg.com/vi/vPP6alw1vgY/hqdefault.jpg",durationSeconds:150,movieId:"61007",movieTitle:"Jigsaw",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Jigsaw_2017_poster.jpg?width=600",movieReleaseDate:"2017-10-27T00:00:00.000Z",movieYear:2017,movieGenre:"Horror, Mystery, Thriller",movieOriginalLanguage:"en",movieCountries:"United States",movieProductionCompanies:"Twisted Pictures",movieDistributor:"Lionsgate Films",score:97}
+] as const;
+async function ensureVerifiedHollywoodCache(){
+  const flag=await prisma.setting.findUnique({where:{key:VERIFIED_HOLLYWOOD_CACHE_KEY}});
+  if(flag?.value==="true")return;
+  for(const v of VERIFIED_HOLLYWOOD_VIDEOS){
+    await prisma.trailerCache.upsert({where:{videoId:v.videoId},create:{id:v.id,videoId:v.videoId,title:v.title,description:"Verified Hollywood movie promotional video.",channelId:"",channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,categoryId:"1",viewCount:0,likeCount:0,commentCount:0,embeddable:true,privacyStatus:"public",score:v.score,lastValidatedAt:new Date(),lastSeenAt:new Date(),movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:v.moviePosterUrl,movieReleaseDate:new Date(v.movieReleaseDate),movieYear:v.movieYear,movieGenre:v.movieGenre,movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor,movieHollywoodEligible:true},update:{title:v.title,channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,embeddable:true,privacyStatus:"public",score:v.score,lastValidatedAt:new Date(),lastSeenAt:new Date(),movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:v.moviePosterUrl,movieReleaseDate:new Date(v.movieReleaseDate),movieYear:v.movieYear,movieGenre:v.movieGenre,movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor,movieHollywoodEligible:true}});
+  }
+  await prisma.setting.upsert({where:{key:VERIFIED_HOLLYWOOD_CACHE_KEY},create:{id:await uniqueSettingId(),key:VERIFIED_HOLLYWOOD_CACHE_KEY,value:"true"},update:{value:"true"}});
+}
 const discoveryStateKey="trending_discovery_state";
 type DiscoveryState={lastAttemptAt?:string;blockedUntil?:string;lastReason?:string;lastQuery?:string};
 async function readDiscoveryState():Promise<DiscoveryState>{
@@ -256,6 +271,7 @@ async function discoverAndCache(cfg:TrendingConfig){
 }
 export async function getTrendingVideosForClient(clientId:string,count:number){
   const cfg=await config();if(!cfg.enabled)throw providerError("YOUTUBE_API_ERROR","Movie trailer tasks are temporarily unavailable.");
+  await ensureVerifiedHollywoodCache();
   const pool=await loadCache(cfg);if(pool.length)return selectMany(clientId,pool,count,cfg);
   const stale=await loadCache(cfg,true);if(stale.length)return selectMany(clientId,stale,count,cfg);
   try{const discovered=await discoverAndCache(cfg);return selectMany(clientId,discovered,count,cfg);}
