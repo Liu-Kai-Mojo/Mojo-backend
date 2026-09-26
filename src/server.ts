@@ -272,12 +272,12 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
   if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before opening another one."});
   let updated=task;
   if(!task.revealedAt){
-    const amount=await randomTaskAmount(availableBalanceCents);
+    const amount=await randomTaskAmount(user.balanceCents,user.frozenCents);
     if(amount===null)return res.status(409).json({error:"Your balance is too low to start this task. Please add funds before continuing."});
     try{
       const video=await getTrendingVideoForClient(clientId);
       updated=await prisma.task.update({where:{id},data:{
-        amountCents:amount,commissionCents:defaultCommission(amount,availableBalanceCents),revealedAt:new Date(),
+        amountCents:amount,commissionCents:defaultCommission(amount,user.balanceCents),revealedAt:new Date(),
         videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.title,moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
         videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
         videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,
