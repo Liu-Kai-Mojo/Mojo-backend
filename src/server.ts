@@ -166,8 +166,8 @@ async function upsertDefaultVipRules(){
 function taskPublic(t:any,includeValues=false){
   const completed=String(t.status||"")===TaskStatus.COMPLETED;
   const hasAssignedVideo=Boolean(t.videoId);
-  const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title));
-  const moviePosterUrl=t.moviePosterUrl||t.videoThumbnailUrl||"";
+  const movieTitle=String(t.movieTitle||t.videoTitle||t.title||"").trim();
+  const moviePosterUrl=String(t.moviePosterUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
   return {
     id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,
@@ -280,7 +280,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
   if(idempotencyKey){const prior=await prisma.task.findFirst({where:{clientId,idempotencyKey}});if(prior)return res.json({success:true,task:taskPublic(prior,true),sessionId:prior.sessionId,idempotent:true});}
   const config=await getTaskManagementConfig(clientId);let videos:any[]=[];
   try{videos=await getTrendingVideosForClient(clientId,config.taskCount);}
-  catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_API_NOT_CONFIGURED","YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXCEEDED","YOUTUBE_RATE_LIMIT","YOUTUBE_TIMEOUT","YOUTUBE_SERVICE_UNAVAILABLE","YOUTUBE_VIDEO_UNAVAILABLE","NO_VALID_TRAILER","TRAILER_CACHE_EMPTY"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your tasks right now. Please try again shortly.",code});}
+  catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXHAUSTED","YOUTUBE_API_ERROR","YOUTUBE_ZERO_RESULTS","YOUTUBE_CANDIDATES_REJECTED","NO_ELIGIBLE_HOLLYWOOD_MOVIE","NO_VALID_CACHED_MOVIE","NO_PLAYABLE_VIDEO","YOUTUBE_DISCOVERY_COOLDOWN"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your tasks right now. Please try again shortly.",code});}
   try{
     const result=await prisma.$transaction(async tx=>{
       const user=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}});
@@ -291,7 +291,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
         if(configured>0){if(configured>remainingExposure)throw Object.assign(new Error("The configured task amount is higher than the client's available balance."),{code:"TASK_AMOUNT_INVALID"});amounts.push(configured);remainingExposure-=configured;continue;}
         const minPercent=Math.ceil(available*amountCfg.minPercent/100);const safeMax=Math.min(remainingExposure-(remaining-1),Math.floor(available*amountCfg.maxPercent/100),amountCfg.maxAbsoluteCents);if(safeMax<1)throw Object.assign(new Error("The current balance cannot support the configured task session."),{code:"LOW_BALANCE"});const min=Math.min(Math.max(1,minPercent),safeMax);const amount=secureRandomCents(min,safeMax);amounts.push(amount);remainingExposure-=amount;
       }
-      const taskRows:any[]=[];for(let i=0;i<config.taskCount;i++){const video=videos[i];const combination=i<config.combinationTaskCount;const amount=amounts[i];const rateBps=combination?1500:vipRule.commissionRateBps;const commission=Math.max(1,Math.round(amount*rateBps/10000));taskRows.push(await tx.task.create({data:{id:await uniqueTaskId(),clientId,sessionId,sequence:i+1,title:normalizeMovieTitle(video.title),taskType:combination?"COMBINATION":"STANDARD",commissionRateBps:rateBps,amountCents:amount,commissionCents:commission,isLucky:combination,videoProvider:video.provider,videoId:video.videoId,videoTitle:normalizeMovieTitle(video.title),movieTitle:normalizeMovieTitle(video.title),moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:i===0&&idempotencyKey?idempotencyKey:null}}));}
+      const taskRows:any[]=[];for(let i=0;i<config.taskCount;i++){const video=videos[i];const combination=i<config.combinationTaskCount;const amount=amounts[i];const rateBps=combination?1500:vipRule.commissionRateBps;const commission=Math.max(1,Math.round(amount*rateBps/10000));taskRows.push(await tx.task.create({data:{id:await uniqueTaskId(),clientId,sessionId,sequence:i+1,title:normalizeMovieTitle(video.movieTitle||video.title),taskType:combination?"COMBINATION":"STANDARD",commissionRateBps:rateBps,amountCents:amount,commissionCents:commission,isLucky:combination,videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:i===0&&idempotencyKey?idempotencyKey:null}}));}
       const totalAmount=amounts.reduce((n,v)=>n+v,0);const totalCommission=taskRows.reduce((n,v)=>n+v.commissionCents,0);
       const session=await tx.taskSession.create({data:{id:sessionId,clientId,vipLevel:config.vipLevel,balanceSnapshotCents:user.balanceCents,generatedTaskCount:config.taskCount,totalTaskAmountCents:totalAmount,totalExpectedCommissionCents:totalCommission,resetNumber:config.resetCount,taskCountOverride:config.taskCount,amountOverrideCents:config.amountCents||null,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,combinationCommissionRateBps:1500}});
       return {session,tasks:taskRows};
@@ -319,7 +319,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       const video=await getTrendingVideoForClient(clientId);
       updated=await prisma.task.update({where:{id},data:{
         amountCents:amount,commissionCents:defaultCommission(amount,user.balanceCents),revealedAt:new Date(),
-        videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.title,moviePosterUrl:video.thumbnailUrl,movieReleaseDate:video.publishedAt?new Date(video.publishedAt):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
+        videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
         videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
         videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,
         videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"
@@ -350,7 +350,7 @@ app.post("/api/client/tasks/:id/video-retry",auth([Role.CLIENT]),asyncRoute(asyn
   try{
     const video=await getTrendingVideoForClient(clientId);
     const updated=await prisma.task.update({where:{id},data:{
-      videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
+      videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
       videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
       videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,
       videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"
@@ -376,7 +376,7 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
   const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,sequence:{gte:config.cycleStartSequence,lt:config.cycleStartSequence+config.taskCount}},orderBy:{sequence:"asc"}});
   if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before continuing."});
   if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});
-  if(!task.videoId)return res.status(400).json({error:"A valid video has not been assigned to this task yet.",code:"NO_VALID_TRAILER"});
+  if(!task.videoId)return res.status(400).json({error:"A valid video has not been assigned to this task yet.",code:"NO_PLAYABLE_VIDEO"});
   const requiredMs=Math.round(Math.max(0,Number(task.requiredWatchSeconds||2.5))*1000);const serverWatchedMs=Math.max(0,Number(task.watchAccumulatedMs||0));const elapsedSinceRevealMs=task.revealedAt?Math.max(0,Date.now()-task.revealedAt.getTime()):0;
   if(requiredMs>0){if(serverWatchedMs<requiredMs)return res.status(409).json({error:"Please watch at least "+Number(task.requiredWatchSeconds||2.5)+" seconds of the trailer before submitting this task.",code:"WATCH_TIME_INCOMPLETE"});if(serverWatchedMs>elapsedSinceRevealMs+1500)return res.status(409).json({error:"Please keep watching the trailer normally before submitting this task.",code:"WATCH_TIME_INVALID"});}
   const result=await prisma.$transaction(async tx=>{
