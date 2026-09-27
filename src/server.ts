@@ -177,14 +177,16 @@ function taskPublic(t:any,includeValues=false){
   const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title||"").trim());
   const moviePosterUrl=String(t.moviePosterUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
+  const videoSource=hasAssignedVideo&&String(t.videoProvider||"youtube")==="youtube"?"https://www.youtube-nocookie.com/embed/"+encodeURIComponent(String(t.videoId)):null;
   return {
     id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,videoId:t.videoId??null,videoTitle:t.videoTitle??null,movieTitle,moviePosterUrl,videoThumbnailUrl:t.videoThumbnailUrl??null,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
     requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,
-    movie:(hasAssignedVideo||t.movieTitle||t.moviePosterUrl)?{title:movieTitle,posterUrl:moviePosterUrl,releaseDate:movieReleaseDate}:null,
+    movie:(hasAssignedVideo||t.movieTitle||t.moviePosterUrl)?{id:t.movieId??null,title:movieTitle,posterUrl:moviePosterUrl,releaseDate:movieReleaseDate}:null,
     video:hasAssignedVideo?{
       provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||movieTitle,
-      channelId:t.videoChannelId||"",channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||moviePosterUrl,
+      source:videoSource,videoUrl:videoSource,playable:true,
+      channelId:t.videoChannelId||"",channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||null,
       durationSeconds:t.videoDurationSeconds??0,publishedAt:t.videoPublishedAt,categoryId:t.videoCategoryId||"",
       viewCount:t.videoViewCount??0,likeCount:t.videoLikeCount??0,commentCount:t.videoCommentCount??0,liveBroadcastContent:t.videoLiveBroadcastContent||"none"
     }:null,
@@ -314,7 +316,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
     },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
     const first=await prisma.task.update({where:{id:result.tasks[0].id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchHeartbeatAt:null}});
     return res.status(201).json({success:true,session:{id:result.session.id,vipLevel:result.session.vipLevel,balanceSnapshotCents:result.session.balanceSnapshotCents,generatedTaskCount:result.session.generatedTaskCount,resetNumber:result.session.resetNumber,totalTaskAmountCents:result.session.totalTaskAmountCents,totalExpectedCommissionCents:result.session.totalExpectedCommissionCents},tasks:result.tasks.map(t=>taskPublic(t,false)),task:taskPublic(first,true),taskConfig:{taskCount:result.session.generatedTaskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents}});
-  }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);if(code==="PENDING_TASK_EXISTS")return res.status(409).json({success:false,error:"You already have an active task session. Please finish the current task first.",code,task:(error as any).task??null,sessionId:(error as any).sessionId??null});return res.status(code==="LOW_BALANCE"||code==="TASK_AMOUNT_INVALID"?409:500).json({success:false,error:error instanceof Error?error.message:"We couldn't prepare your tasks right now. Please try again shortly.",code});}
+  }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",{operation:"task-start",code,error:error instanceof Error?error.message:String(error)});if(code==="PENDING_TASK_EXISTS")return res.status(409).json({success:false,error:"You already have an active task session. Please finish the current task first.",code,task:(error as any).task??null,sessionId:(error as any).sessionId??null});const unavailable=["YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXHAUSTED","YOUTUBE_API_ERROR","YOUTUBE_ZERO_RESULTS","YOUTUBE_CANDIDATES_REJECTED","NO_ELIGIBLE_HOLLYWOOD_MOVIE","NO_VALID_CACHED_MOVIE","NO_PLAYABLE_VIDEO","NO_PLAYABLE_MOVIE_VIDEO","VIDEO_NOT_PLAYABLE","VIDEO_NOT_EMBEDDABLE","VIDEO_UNAVAILABLE","POSTER_UNAVAILABLE","MOVIE_NOT_FOUND","YOUTUBE_DISCOVERY_COOLDOWN"];return res.status(unavailable.includes(code)?503:(code==="LOW_BALANCE"||code==="TASK_AMOUNT_INVALID"?409:500)).json({success:false,error:"We couldn't prepare your movie right now. Please try again shortly.",code});}
 }));
 app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
