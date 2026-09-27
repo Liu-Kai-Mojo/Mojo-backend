@@ -669,6 +669,7 @@ app.use((req,res)=>res.status(404).json({error:"Route not found.",path:req.path}
 app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{
   if(err instanceof z.ZodError)return res.status(422).json({error:err.issues[0]?.message||"Please check the submitted details.",code:"VALIDATION_ERROR"});
   if(err instanceof Error&&err.message==="Origin is not allowed by CORS.")return res.status(403).json({error:"This origin is not allowed to access the API.",code:"CORS_FORBIDDEN"});
+  if(err instanceof Error&&(err as any).code==="DAILY_RESET_LIMIT")return res.status(429).json({error:err.message,code:"DAILY_RESET_LIMIT"});
   console.error(err);
   if(isProduction)return res.status(500).json({error:"An unexpected server error occurred.",code:"INTERNAL_ERROR"});
   return res.status(500).json({error:err instanceof Error?err.message:"Something went wrong. Please try again.",code:"INTERNAL_ERROR"});
