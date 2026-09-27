@@ -95,7 +95,6 @@ const taskConfigKey=(clientId:string)=>`client_task_config_${clientId}`;
 const dailyResetUsageKey=(clientId:string)=>`client_task_reset_usage_${clientId}`;
 const taskCycleKey=(clientId:string)=>`client_task_cycle_${clientId}`;
 const vipRuleKey=(vip:string)=>`vip_rule_${vip}`;
-const bonusConfigKey=(clientId:string)=>`client_bonus_${clientId}`;
 const clampTaskCount=(value:number)=>Math.max(1,Math.min(100,Math.trunc(Number.isFinite(value)?value:30)));
 const clampMoneyCents=(value:number)=>Math.max(0,Math.min(1_000_000_000,Math.trunc(Number.isFinite(value)?value:0)));
 const clampRateBps=(value:number)=>Math.max(1,Math.min(10000,Math.trunc(Number.isFinite(value)?value:70)));
