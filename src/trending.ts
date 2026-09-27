@@ -35,8 +35,7 @@ type TrendingConfig = {
   maxCandidates:number;
   refreshIntervalMs:number;
   discoveryCooldownMs:number;
-  discoveryQueries:string[];
-  discoveryOrders:string[];
+  discoveryMaxAttempts:number;
 };
 
 type UpstreamError = Error & { code:string };
@@ -55,11 +54,10 @@ function numberSetting(value:string|undefined,fallback:number,min=0){
 }
 async function readSetting(key:string){const row=await prisma.setting.findUnique({where:{key}});return row?.value;}
 async function config():Promise<TrendingConfig>{
-  const keys=["trending_videos_enabled","trending_region_code","trending_relevance_language","trending_cache_ttl_minutes","trending_pool_size","trending_recent_history_size","trending_repeat_cooldown_hours","trending_min_duration_seconds","trending_max_duration_seconds","trending_freshness_days","trending_max_candidates","trending_refresh_interval_minutes","trending_discovery_cooldown_minutes","trending_discovery_queries","trending_discovery_orders"];
+  const keys=["trending_videos_enabled","trending_region_code","trending_relevance_language","trending_cache_ttl_minutes","trending_pool_size","trending_recent_history_size","trending_repeat_cooldown_hours","trending_min_duration_seconds","trending_max_duration_seconds","trending_freshness_days","trending_max_candidates","trending_refresh_interval_minutes","trending_discovery_cooldown_minutes","trending_discovery_max_attempts"];
   const values=await Promise.all(keys.map(readSetting));
   const env=process.env;
-  const rawQueries=(values[13]??env.TRENDING_DISCOVERY_QUERIES??"new movie trailer|latest movie trailer|upcoming movie trailer|trending movie trailer|popular movie trailer|official movie trailer").split("|").map(v=>v.trim()).filter(Boolean);
-  const rawOrders=(values[14]??env.TRENDING_DISCOVERY_ORDERS??"date|viewCount|relevance").split("|").map(v=>v.trim()).filter(v=>["date","viewCount","relevance"].includes(v));
+  const discoveryMaxAttempts=Math.max(1,Math.min(4,Math.floor(numberSetting(values[13]??env.TRENDING_DISCOVERY_MAX_ATTEMPTS,4,1))));
   return {
     enabled:(values[0]??env.TRENDING_VIDEOS_ENABLED??"true").toLowerCase()!=="false",
     regionCode:"GLOBAL",
@@ -74,8 +72,7 @@ async function config():Promise<TrendingConfig>{
     maxCandidates:Math.max(10,Math.min(50,Math.floor(numberSetting(values[10]??env.TRAILER_MAX_CANDIDATES,50,1)))),
     refreshIntervalMs:Math.max(5,numberSetting(values[11]??env.TRAILER_REFRESH_INTERVAL_MINUTES,60,5))*60_000,
     discoveryCooldownMs:Math.max(5,numberSetting(values[12]??env.TRENDING_DISCOVERY_COOLDOWN_MINUTES,360,5))*60_000,
-    discoveryQueries:rawQueries.length?rawQueries:["official movie trailer"],
-    discoveryOrders:rawOrders.length?rawOrders:["date","viewCount","relevance"]
+    discoveryMaxAttempts
   };
 }
 function parseDuration(value:string){
@@ -161,7 +158,7 @@ async function discover(movie:EligibleMovie,cfg:TrendingConfig){
   if(!isEligibleHollywoodMovie(movie)||!moviePosterIsUsable(movie))throw providerError("NO_ELIGIBLE_HOLLYWOOD_MOVIE","The selected movie is not eligible for MOJO.");
   const queries=[movie.title+" official trailer",movie.title+" trailer",movie.title+" movie clip",movie.title+" official clip"];
   const searchResults:any[]=[];let ids:string[]=[];let lastQuery="";
-  for(const query of queries){
+  for(const query of queries.slice(0,cfg.discoveryMaxAttempts)){
     const url=new URL("https://youtube.googleapis.com/youtube/v3/search");
     url.searchParams.set("part","snippet");url.searchParams.set("type","video");url.searchParams.set("order","relevance");url.searchParams.set("relevanceLanguage","en");url.searchParams.set("maxResults","10");url.searchParams.set("q",query);url.searchParams.set("key",key);
     console.log("[trending] YouTube search request",{operation:"search.list",part:"snippet",q:query,type:"video",maxResults:10,regionCode:null,relevanceLanguage:"en",safeSearch:null,order:"relevance"});
