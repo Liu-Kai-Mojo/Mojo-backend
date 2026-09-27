@@ -212,11 +212,15 @@ async function validateCachedVideo(row:any){
   if(!posterOk)return {valid:false,reason:"POSTER_UNAVAILABLE"};
   return {valid:true,reason:"OK"};
 }
+const CACHE_REVALIDATION_MS=15*60_000;
 async function loadCache(cfg:TrendingConfig,allowStale=false){
   const cutoff=new Date(Date.now()-cfg.freshnessDays*86400000);
   const rows=await prisma.trailerCache.findMany({where:{embeddable:true,privacyStatus:"public",movieHollywoodEligible:true,movieId:{not:null},movieTitle:{not:null},moviePosterUrl:{not:null},...(allowStale?{}:{lastValidatedAt:{gte:cutoff}})},orderBy:{score:"desc"},take:Math.max(cfg.poolSize,50)});
+  const now=Date.now();
   const candidates=rows.slice(0,cfg.poolSize);
   const checked=await Promise.all(candidates.map(async row=>{
+    const lastValidated=row.lastValidatedAt?new Date(row.lastValidatedAt).getTime():0;
+    if(lastValidated>0 && now-lastValidated<CACHE_REVALIDATION_MS)return fromCache(row);
     const validation=await validateCachedVideo(row);
     if(validation.valid){
       await prisma.trailerCache.update({where:{videoId:row.videoId},data:{lastValidatedAt:new Date(),lastSeenAt:new Date()}});
