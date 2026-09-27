@@ -193,24 +193,106 @@ async function writeCache(pool:TrendingVideo[]){
 function fromCache(row:any):TrendingVideo{return {provider:"youtube",videoId:row.videoId,title:row.title,description:row.description,channelId:row.channelId,channelTitle:row.channelTitle,thumbnailUrl:row.thumbnailUrl,durationSeconds:row.durationSeconds,publishedAt:row.publishedAt.toISOString(),categoryId:row.categoryId,viewCount:row.viewCount,likeCount:row.likeCount,commentCount:row.commentCount,liveBroadcastContent:"none",score:row.score,movieId:String(row.movieId),movieTitle:String(row.movieTitle),moviePosterUrl:String(row.moviePosterUrl),movieReleaseDate:row.movieReleaseDate?row.movieReleaseDate.toISOString():null,movieYear:Number(row.movieYear||0),movieGenre:String(row.movieGenre||""),movieOriginalLanguage:String(row.movieOriginalLanguage||""),movieCountries:String(row.movieCountries||""),movieProductionCompanies:String(row.movieProductionCompanies||""),movieDistributor:String(row.movieDistributor||"")};}
 async function fetchExternalOk(url:string,method:"GET"|"HEAD"="GET"){
   try{
-    const response=await fetch(url,{method,signal:AbortSignal.timeout(5000),headers:method==="GET"?{Range:"bytes=0-1"}:undefined});
+    const response=await fetch(url,{method,signal:AbortSignal.timeout(7000),headers:method==="GET"?{Range:"bytes=0-1"}:undefined});
     return response.ok;
   }catch{return false;}
 }
+function imageDimensions(bytes:Uint8Array,contentType:string){
+  const type=String(contentType||"").toLowerCase();
+  if(type.includes("png")&&bytes.length>=24&&bytes[0]===137&&bytes[1]===80&&bytes[2]===78&&bytes[3]===71){
+    return {width:new DataView(bytes.buffer,bytes.byteOffset).getUint32(16),height:new DataView(bytes.buffer,bytes.byteOffset).getUint32(20)};
+  }
+  if(type.includes("jpeg")&&bytes.length>4&&bytes[0]===0xff&&bytes[1]===0xd8){
+    let i=2;
+    while(i+9<bytes.length){
+      if(bytes[i]!==0xff){i++;continue;}
+      const marker=bytes[i+1];i+=2;
+      if(marker===0xd8||marker===0xd9)continue;
+      if(i+2>bytes.length)break;
+      const len=(bytes[i]<<8)|bytes[i+1];
+      if(len<2||i+len>bytes.length)break;
+      if((marker>=0xc0&&marker<=0xc3)||(marker>=0xc5&&marker<=0xc7)||(marker>=0xc9&&marker<=0xcb)||(marker>=0xcd&&marker<=0xcf)){
+        return {height:(bytes[i+3]<<8)|bytes[i+4],width:(bytes[i+5]<<8)|bytes[i+6]};
+      }
+      i+=len;
+    }
+  }
+  if(type.includes("webp")&&bytes.length>=30&&String.fromCharCode(...bytes.slice(0,4))==="RIFF"&&String.fromCharCode(...bytes.slice(8,12))==="WEBP"){
+    const four=String.fromCharCode(...bytes.slice(12,16));
+    if(four==="VP8X")return {width:1+bytes[24]+(bytes[25]<<8)+(bytes[26]<<16),height:1+bytes[27]+(bytes[28]<<8)+(bytes[29]<<16)};
+  }
+  return null;
+}
+async function validatePosterUrl(url:string){
+  const candidate=String(url||"").trim();
+  if(!/^https?:\/\//i.test(candidate))return {valid:false,reason:"INVALID_URL"};
+  try{
+    const response=await fetch(candidate,{signal:AbortSignal.timeout(7000),headers:{Accept:"image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"}});
+    if(!response.ok)return {valid:false,reason:"HTTP_"+response.status};
+    const type=String(response.headers.get("content-type")||"").toLowerCase();
+    if(!type.startsWith("image/"))return {valid:false,reason:"NOT_IMAGE"};
+    const bytes=new Uint8Array(await response.arrayBuffer());
+    const dimensions=imageDimensions(bytes,type);
+    if(!dimensions||dimensions.width<200||dimensions.height<300)return {valid:false,reason:"INVALID_DIMENSIONS"};
+    if(dimensions.height<dimensions.width*1.25)return {valid:false,reason:"NOT_PORTRAIT"};
+    return {valid:true,width:dimensions.width,height:dimensions.height};
+  }catch{return {valid:false,reason:"FETCH_FAILED"};}
+}
+async function resolveTmdbPoster(movie:EligibleMovie){
+  const token=String(process.env.TMDB_API_READ_TOKEN||"").trim();
+  if(!token)return null;
+  try{
+    const url=new URL("https://api.themoviedb.org/3/search/movie");
+    url.searchParams.set("query",movie.title);
+    url.searchParams.set("include_adult","false");
+    url.searchParams.set("language","en-US");
+    url.searchParams.set("page","1");
+    if(movie.year>0)url.searchParams.set("primary_release_year",String(movie.year));
+    const response=await fetch(url,{signal:AbortSignal.timeout(7000),headers:{Accept:"application/json",Authorization:"Bearer "+token}});
+    if(!response.ok)return null;
+    const payload:any=await response.json();
+    const results=Array.isArray(payload?.results)?payload.results:[];
+    const normalized=movie.title.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+    const match=results.find((item:any)=>{
+      const title=String(item?.title||item?.original_title||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+      const year=Number(String(item?.release_date||"").slice(0,4));
+      return title===normalized&&(!movie.year||!year||year===movie.year)&&String(item?.poster_path||"").trim();
+    })||results.find((item:any)=>String(item?.poster_path||"").trim());
+    if(!match?.poster_path)return null;
+    const poster="https://image.tmdb.org/t/p/w780"+String(match.poster_path);
+    const validation=await validatePosterUrl(poster);
+    if(!validation.valid)return null;
+    console.log("[poster-validation]",{operation:"tmdb-resolve",movieId:movie.id,movieTitle:movie.title,status:"valid",width:validation.width,height:validation.height});
+    return poster;
+  }catch{return null;}
+}
+async function ensureMoviePoster(movie:EligibleMovie,existing:string){
+  const current=String(existing||"").trim();
+  const currentValidation=await validatePosterUrl(current);
+  if(currentValidation.valid)return current;
+  const repaired=await resolveTmdbPoster(movie);
+  if(repaired){
+    await prisma.movie.update({where:{id:movie.id},data:{posterUrl:repaired}}).catch(()=>{});
+    return repaired;
+  }
+  return null;
+}
 async function validateCachedVideo(row:any){
   const videoId=String(row.videoId||"").trim();
-  const poster=String(row.moviePosterUrl||"").trim();
   const thumbnail=String(row.thumbnailUrl||"").trim();
-  if(!videoId||!poster||!thumbnail)return {valid:false,reason:"MISSING_REQUIRED_METADATA"};
-  const [oembedOk,thumbnailOk,posterOk]=await Promise.all([
+  const movieId=String(row.movieId||"").trim();
+  const movie=movieId?await prisma.movie.findUnique({where:{id:movieId}}):null;
+  if(!videoId||!thumbnail||!movie||!isEligibleHollywoodMovie(movie))return {valid:false,reason:"MISSING_REQUIRED_METADATA"};
+  const poster=await ensureMoviePoster(movie,String(row.moviePosterUrl||""));
+  if(!poster)return {valid:false,reason:"POSTER_UNAVAILABLE"};
+  const [oembedOk,thumbnailOk]=await Promise.all([
     fetchExternalOk("https://www.youtube.com/oembed?url="+encodeURIComponent("https://www.youtube.com/watch?v="+videoId)+"&format=json"),
-    fetchExternalOk(thumbnail),
-    fetchExternalOk(poster)
+    fetchExternalOk(thumbnail)
   ]);
   if(!oembedOk)return {valid:false,reason:"VIDEO_UNAVAILABLE"};
   if(!thumbnailOk)return {valid:false,reason:"THUMBNAIL_UNAVAILABLE"};
-  if(!posterOk)return {valid:false,reason:"POSTER_UNAVAILABLE"};
-  return {valid:true,reason:"OK"};
+  if(poster!==String(row.moviePosterUrl||""))await prisma.trailerCache.update({where:{videoId},data:{moviePosterUrl:poster}});
+  return {valid:true,reason:"OK",posterUrl:poster};
 }
 const CACHE_REVALIDATION_MS=15*60_000;
 async function loadCache(cfg:TrendingConfig,allowStale=false){
@@ -223,8 +305,8 @@ async function loadCache(cfg:TrendingConfig,allowStale=false){
     if(lastValidated>0 && now-lastValidated<CACHE_REVALIDATION_MS)return fromCache(row);
     const validation=await validateCachedVideo(row);
     if(validation.valid){
-      await prisma.trailerCache.update({where:{videoId:row.videoId},data:{lastValidatedAt:new Date(),lastSeenAt:new Date()}});
-      return fromCache(row);
+      await prisma.trailerCache.update({where:{videoId:row.videoId},data:{lastValidatedAt:new Date(),lastSeenAt:new Date(),...(validation.posterUrl?{moviePosterUrl:validation.posterUrl}:{})}});
+      return fromCache({...row,moviePosterUrl:validation.posterUrl||row.moviePosterUrl});
     }
     console.warn("[trending] stale cache rejected",{operation:"cache-validation",videoId:String(row.videoId),movieId:String(row.movieId||""),movieTitle:String(row.movieTitle||""),reason:validation.reason});
     await prisma.trailerCache.update({where:{videoId:row.videoId},data:{lastValidatedAt:new Date(0),lastSeenAt:new Date()}}).catch(()=>{});
@@ -271,12 +353,13 @@ const VERIFIED_HOLLYWOOD_VIDEOS=[
 ] as const;
 async function ensureVerifiedHollywoodCache(){
   for(const videoId of INVALID_KNOWN_VIDEO_IDS){await prisma.trailerCache.updateMany({where:{videoId},data:{embeddable:false,lastValidatedAt:new Date(0)}}).catch(()=>{});}
-  const flag=await prisma.setting.findUnique({where:{key:VERIFIED_HOLLYWOOD_CACHE_KEY}});
-  if(flag?.value==="true")return;
   for(const v of VERIFIED_HOLLYWOOD_VIDEOS){
-    await prisma.trailerCache.upsert({where:{videoId:v.videoId},create:{id:v.id,videoId:v.videoId,title:v.title,description:"Verified Hollywood movie promotional video.",channelId:"",channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,categoryId:"1",viewCount:0,likeCount:0,commentCount:0,embeddable:true,privacyStatus:"public",score:v.score,lastValidatedAt:new Date(),lastSeenAt:new Date(),createdAt:new Date(),updatedAt:new Date(),movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:v.moviePosterUrl,movieReleaseDate:new Date(v.movieReleaseDate),movieYear:v.movieYear,movieGenre:v.movieGenre,movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor,movieHollywoodEligible:true},update:{title:v.title,channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,embeddable:true,privacyStatus:"public",score:v.score,lastValidatedAt:new Date(),lastSeenAt:new Date(),movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:v.moviePosterUrl,movieReleaseDate:new Date(v.movieReleaseDate),movieYear:v.movieYear,movieGenre:v.movieGenre,movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor,movieHollywoodEligible:true}});
+    const movie=await prisma.movie.findUnique({where:{id:v.movieId}});
+    if(!movie||!isEligibleHollywoodMovie(movie))continue;
+    const poster=await ensureMoviePoster(movie,v.moviePosterUrl);
+    if(!poster){console.warn("[poster-validation]",{operation:"bootstrap",movieId:v.movieId,movieTitle:v.movieTitle,status:"unavailable"});continue;}
+    await prisma.trailerCache.upsert({where:{videoId:v.videoId},create:{id:v.id,videoId:v.videoId,title:v.title,description:"Verified Hollywood movie promotional video.",channelId:"",channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,categoryId:"1",viewCount:0,likeCount:0,commentCount:0,embeddable:true,privacyStatus:"public",score:v.score,lastValidatedAt:new Date(0),lastSeenAt:new Date(),createdAt:new Date(),updatedAt:new Date(),movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:poster,movieReleaseDate:new Date(v.movieReleaseDate),movieYear:v.movieYear,movieGenre:v.movieGenre,movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor,movieHollywoodEligible:true},update:{title:v.title,channelTitle:v.channelTitle,publishedAt:new Date(v.publishedAt),thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,embeddable:true,privacyStatus:"public",score:v.score,lastValidatedAt:new Date(0),lastSeenAt:new Date(),movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:poster,movieReleaseDate:new Date(v.movieReleaseDate),movieYear:v.movieYear,movieGenre:v.movieGenre,movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor,movieHollywoodEligible:true}});
   }
-  await prisma.setting.upsert({where:{key:VERIFIED_HOLLYWOOD_CACHE_KEY},create:{id:await uniqueSettingId(),key:VERIFIED_HOLLYWOOD_CACHE_KEY,value:"true"},update:{value:"true"}});
 }
 const discoveryStateKey="trending_discovery_state";
 type DiscoveryState={lastAttemptAt?:string;blockedUntil?:string;lastReason?:string;lastQuery?:string};
