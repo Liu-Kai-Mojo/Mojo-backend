@@ -25,4 +25,5 @@ export async function getEligibleHollywoodMovies(excludeIds:string[]=[]){
   return rows.filter(isEligibleHollywoodMovie).filter(m=>!excludeIds.includes(m.id));
 }
 
+// Movie poster URLs are revalidated by the trailer/cache pipeline before assignment.
 export function moviePosterIsUsable(movie:EligibleMovie){return /^https?:\/\//i.test(String(movie.posterUrl||""));}
