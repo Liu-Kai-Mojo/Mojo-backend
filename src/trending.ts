@@ -261,6 +261,7 @@ async function selectMany(clientId:string,pool:TrendingVideo[],count:number,cfg:
   return selected;
 }
 async function select(clientId:string,pool:TrendingVideo[],cfg:TrendingConfig){return (await selectMany(clientId,pool,1,cfg))[0];}
+const INVALID_KNOWN_VIDEO_IDS=new Set(["vPP6alw1vgY"]);
 const VERIFIED_HOLLYWOOD_CACHE_KEY="hollywood_verified_cache_v1";
 const VERIFIED_HOLLYWOOD_VIDEOS=[
   {id:"62001",videoId:"Qwe6qXFTdgc",title:"Inception | Digital Trailer",channelTitle:"Warner Bros. Entertainment",publishedAt:"2010-10-19T00:00:00.000Z",thumbnailUrl:"https://i.ytimg.com/vi/Qwe6qXFTdgc/hqdefault.jpg",durationSeconds:180,movieId:"61004",movieTitle:"Inception",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Inception_(2010)_theatrical_poster.jpg?width=600",movieReleaseDate:"2010-07-16T00:00:00.000Z",movieYear:2010,movieGenre:"Science Fiction, Action, Thriller",movieOriginalLanguage:"en",movieCountries:"United States;United Kingdom",movieProductionCompanies:"Warner Bros. Pictures;Legendary Pictures;Syncopy",movieDistributor:"Warner Bros. Pictures",score:100},
@@ -269,6 +270,7 @@ const VERIFIED_HOLLYWOOD_VIDEOS=[
   {id:"62004",videoId:"vPP6alw1vgY",title:"Jigsaw | Official Trailer",channelTitle:"Lionsgate Movies",publishedAt:"2017-07-20T00:00:00.000Z",thumbnailUrl:"https://i.ytimg.com/vi/vPP6alw1vgY/hqdefault.jpg",durationSeconds:150,movieId:"61007",movieTitle:"Jigsaw",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Jigsaw_2017_poster.jpg?width=600",movieReleaseDate:"2017-10-27T00:00:00.000Z",movieYear:2017,movieGenre:"Horror, Mystery, Thriller",movieOriginalLanguage:"en",movieCountries:"United States",movieProductionCompanies:"Twisted Pictures",movieDistributor:"Lionsgate Films",score:97}
 ] as const;
 async function ensureVerifiedHollywoodCache(){
+  for(const videoId of INVALID_KNOWN_VIDEO_IDS){await prisma.trailerCache.updateMany({where:{videoId},data:{embeddable:false,lastValidatedAt:new Date(0)}}).catch(()=>{});}
   const flag=await prisma.setting.findUnique({where:{key:VERIFIED_HOLLYWOOD_CACHE_KEY}});
   if(flag?.value==="true")return;
   for(const v of VERIFIED_HOLLYWOOD_VIDEOS){
