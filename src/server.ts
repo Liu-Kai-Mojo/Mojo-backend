@@ -182,7 +182,7 @@ function taskPublic(t:any,includeValues=false){
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
   const videoSource=hasAssignedVideo&&String(t.videoProvider||"youtube")==="youtube"?"https://www.youtube-nocookie.com/embed/"+encodeURIComponent(String(t.videoId)):null;
   return {
-    id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,videoId:t.videoId??null,videoTitle:t.videoTitle??null,movieTitle,moviePosterUrl,videoThumbnailUrl:t.videoThumbnailUrl??null,
+    id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,sessionGeneratedTaskCount:t.session?.generatedTaskCount??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,videoId:t.videoId??null,videoTitle:t.videoTitle??null,movieTitle,moviePosterUrl,videoThumbnailUrl:t.videoThumbnailUrl??null,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
     requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,
     movie:(hasAssignedVideo||t.movieTitle||t.moviePosterUrl)?{id:t.movieId??null,title:movieTitle,posterUrl:moviePosterUrl,releaseDate:movieReleaseDate}:null,
@@ -285,7 +285,7 @@ app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const current=tasks.find(t=>t.status===TaskStatus.PENDING&&t.revealedAt)||tasks.find(t=>t.status===TaskStatus.PENDING)||null;
   res.json({tasks:tasks.map(t=>taskPublic(t,false)),current:current?taskPublic(current,false):null,completed:tasks.filter(t=>t.status===TaskStatus.COMPLETED).length,total:session?.generatedTaskCount??config.taskCount,taskConfig:{taskCount:session?.generatedTaskCount??config.taskCount,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents}});
 }));
-app.get("/api/client/history",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const rows=await prisma.task.findMany({where:{clientId:res.locals.auth.sub,status:TaskStatus.COMPLETED},orderBy:{completedAt:"desc"}});res.json({history:rows.map(t=>taskPublic(t,true))});}));
+app.get("/api/client/history",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const rows=await prisma.task.findMany({where:{clientId:res.locals.auth.sub,status:TaskStatus.COMPLETED},include:{session:{select:{generatedTaskCount:true}}},orderBy:{completedAt:"desc"}});res.json({history:rows.map(t=>taskPublic(t,true))});}));
 app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const clientId=res.locals.auth.sub;const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
   const active=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
