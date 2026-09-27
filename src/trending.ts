@@ -408,5 +408,5 @@ export async function warmTrendingVideoCache(){
 }
 export async function trendingConfig(){
   const cfg=await config();
-  return {enabled:cfg.enabled,provider:"YouTube",regionCode:cfg.regionCode,relevanceLanguage:cfg.relevanceLanguage,cacheTtlMinutes:cfg.cacheTtlMs/60000,poolSize:cfg.poolSize,recentHistorySize:cfg.recentHistorySize,repeatCooldownHours:cfg.repeatCooldownHours,minDurationSeconds:cfg.minDurationSeconds,maxDurationSeconds:cfg.maxDurationSeconds,freshnessDays:cfg.freshnessDays,maxCandidates:cfg.maxCandidates,refreshIntervalMinutes:cfg.refreshIntervalMs/60000,discoveryCooldownMinutes:cfg.discoveryCooldownMs/60000,discoveryQueries:cfg.discoveryQueries,discoveryOrders:cfg.discoveryOrders};
+  return {enabled:cfg.enabled,provider:"YouTube",regionCode:cfg.regionCode,relevanceLanguage:cfg.relevanceLanguage,cacheTtlMinutes:cfg.cacheTtlMs/60000,poolSize:cfg.poolSize,recentHistorySize:cfg.recentHistorySize,repeatCooldownHours:cfg.repeatCooldownHours,minDurationSeconds:cfg.minDurationSeconds,maxDurationSeconds:cfg.maxDurationSeconds,freshnessDays:cfg.freshnessDays,maxCandidates:cfg.maxCandidates,refreshIntervalMinutes:cfg.refreshIntervalMs/60000,discoveryCooldownMinutes:cfg.discoveryCooldownMs/60000,discoveryMaxAttempts:cfg.discoveryMaxAttempts};
 }
