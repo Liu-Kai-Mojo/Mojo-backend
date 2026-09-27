@@ -91,6 +91,7 @@ function defaultCommission(amount:number,balanceCents:number){return Math.max(1,
 type VipRule={taskCount:number;commissionRateBps:number};
 type TaskManagementConfig={taskCount:number;requiredDepositCents:number;amountCents:number;vipLevel:string;resetCount:number;cycleStartSequence:number;combinationTaskCount:number;combinationTaskAmountCents:number;combinationTaskSequences:number[];combinationCommissionRateBps:number};
 const taskConfigKey=(clientId:string)=>`client_task_config_${clientId}`;
+const dailyResetUsageKey=(clientId:string)=>`client_task_reset_usage_${clientId}`;
 const taskCycleKey=(clientId:string)=>`client_task_cycle_${clientId}`;
 const vipRuleKey=(vip:string)=>`vip_rule_${vip}`;
 const clampTaskCount=(value:number)=>Math.max(1,Math.min(100,Math.trunc(Number.isFinite(value)?value:30)));
@@ -99,7 +100,7 @@ const clampRateBps=(value:number)=>Math.max(1,Math.min(10000,Math.trunc(Number.i
 const normalizeVipLevel=(value:unknown)=>{const raw=String(value??"VIP1").trim().toUpperCase();return /^VIP[0-9]{1,2}$/.test(raw)?raw:"VIP1";};
 function defaultVipRule(vip:string):VipRule{
   const n=Math.max(1,Math.min(100,Number(String(vip).replace(/\\D/g,""))||1));
-  return {taskCount:n===1?30:n===2?40:n===3?50:n===4?60:60,commissionRateBps:n===1?70:n===2?80:n===3?90:100};
+  return {taskCount:n===1?30:n===2?40:n===3?50:n===4?60:60,commissionRateBps:n===1?70:n===2?80:n===3?140:n===4?160:160};
 }
 async function getVipRule(vipInput:unknown):Promise<VipRule>{
   const vip=normalizeVipLevel(vipInput);const fallback=defaultVipRule(vip);
@@ -166,8 +167,8 @@ async function upsertDefaultVipRules(){
   const defaults:[string,VipRule][]=[
     ["VIP1",{taskCount:30,commissionRateBps:70}],
     ["VIP2",{taskCount:40,commissionRateBps:80}],
-    ["VIP3",{taskCount:50,commissionRateBps:90}],
-    ["VIP4",{taskCount:60,commissionRateBps:100}]
+    ["VIP3",{taskCount:50,commissionRateBps:140}],
+    ["VIP4",{taskCount:60,commissionRateBps:160}]
   ];
   for(const [vip,rule] of defaults)await prisma.setting.upsert({where:{key:vipRuleKey(vip)},create:{id:await uniqueSettingId(),key:vipRuleKey(vip),value:JSON.stringify(rule)},update:{}});
 }
@@ -594,7 +595,23 @@ app.patch("/api/admin/clients/:id/task-management",auth(staff),asyncRoute(async(
 app.post("/api/admin/clients/:id/tasks/reset",auth(staff),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const client=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!client)return res.status(404).json({error:"Client not found."});
   const current=await getTaskManagementConfig(id);
-  const result=await prisma.$transaction(async tx=>{const active=await tx.taskSession.findFirst({where:{clientId:id,status:"ACTIVE"},orderBy:{createdAt:"desc"}});if(active)await tx.taskSession.update({where:{id:active.id},data:{status:"RESET"}});const vipRule=await getVipRule(current.vipLevel);const taskCount=vipRule.taskCount;const combinationTaskSequences=current.combinationTaskSequences.filter(sequence=>sequence>=1&&sequence<=taskCount);const next={...current,taskCount,combinationTaskSequences,combinationTaskCount:combinationTaskSequences.length,resetCount:current.resetCount+1};await saveTaskManagementConfig(tx,id,next);return next;},{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
+  const result=await prisma.$transaction(async tx=>{
+  const today=new Date().toISOString().slice(0,10);
+  const usageRow=await tx.setting.findUnique({where:{key:dailyResetUsageKey(id)}});
+  let used=0;let usageDate=today;
+  try{const parsed=usageRow?.value?JSON.parse(usageRow.value):{};usageDate=String(parsed.date||today);used=Number(parsed.count||0)}catch{}
+  if(usageDate!==today)used=0;
+  if(used>=3)throw Object.assign(new Error("The account can be reset at most 3 times a day."),{code:"DAILY_RESET_LIMIT"});
+  const active=await tx.taskSession.findFirst({where:{clientId:id,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
+  if(active)await tx.taskSession.update({where:{id:active.id},data:{status:"RESET"}});
+  const vipRule=await getVipRule(current.vipLevel);
+  const taskCount=vipRule.taskCount;
+  const combinationTaskSequences=current.combinationTaskSequences.filter(sequence=>sequence>=1&&sequence<=taskCount);
+  const next={...current,taskCount,combinationTaskSequences,combinationTaskCount:combinationTaskSequences.length,resetCount:current.resetCount+1};
+  await saveTaskManagementConfig(tx,id,next);
+  await tx.setting.upsert({where:{key:dailyResetUsageKey(id)},create:{id:await uniqueSettingId(),key:dailyResetUsageKey(id),value:JSON.stringify({date:today,count:used+1})},update:{value:JSON.stringify({date:today,count:used+1})}});
+  return next;
+},{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
   await audit(res.locals.auth.sub,id,"CLIENT_TASK_CYCLE_RESET",{taskCount:result.taskCount,resetCount:result.resetCount});
   res.json({tasks:[],taskManagement:{taskCount:result.taskCount,completedTasks:0,remainingTasks:result.taskCount,resetCount:result.resetCount,vipLevel:result.vipLevel,requiredDepositCents:result.requiredDepositCents,amountCents:result.amountCents,combinationTaskCount:result.combinationTaskCount,combinationTaskAmountCents:result.combinationTaskAmountCents,combinationTaskSequences:result.combinationTaskSequences},message:"Task cycle reset. The next Starting action will generate a new session. Previous history was preserved."});
 }));
