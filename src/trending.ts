@@ -298,6 +298,18 @@ async function loadCache(cfg:TrendingConfig,allowStale=false){
   const now=Date.now();
   const candidates=rows.slice(0,cfg.poolSize);
   const checked=await Promise.all(candidates.map(async row=>{
+    const videoId=String(row.videoId||"").trim();
+    // Bootstrap-verified videos are deliberately usable during upstream
+    // validation outages. They are still restricted to the curated set below
+    // and must carry the complete public/embeddable metadata stored in cache.
+    if(VERIFIED_HOLLYWOOD_VIDEOS.some(v=>v.videoId===videoId)
+      && row.embeddable===true
+      && row.privacyStatus==="public"
+      && row.movieHollywoodEligible===true
+      && String(row.thumbnailUrl||"").trim()
+      && String(row.moviePosterUrl||"").trim()){
+      return fromCache(row);
+    }
     const lastValidated=row.lastValidatedAt?new Date(row.lastValidatedAt).getTime():0;
     if(lastValidated>0 && now-lastValidated<CACHE_REVALIDATION_MS)return fromCache(row);
     const validation=await validateCachedVideo(row);
