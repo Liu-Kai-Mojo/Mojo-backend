@@ -598,6 +598,7 @@ app.patch("/api/admin/clients/:id/task-management",auth(staff),asyncRoute(async(
   await audit(res.locals.auth.sub,id,"CLIENT_TASK_CONFIGURATION_UPDATED",{previous:current,next});
   res.json({client:safeUser(client),taskManagement:{...next,sessionId:null},message:"Client task configuration saved for the next Starting session."});
 }));
+app.delete("/api/admin/clients/:id/task-management/bonus/:bonusId",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{const id=param(req,"id"),bonusId=param(req,"bonusId");const client=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!client)return res.status(404).json({error:"Client not found."});const current=await getTaskManagementConfig(id);const next={...current,bonusHistory:current.bonusHistory.filter(x=>x.id!==bonusId)};await prisma.setting.upsert({where:{key:taskConfigKey(id)},create:{id:await uniqueSettingId(),key:taskConfigKey(id),value:JSON.stringify(next)},update:{value:JSON.stringify(next)}});await audit(res.locals.auth.sub,id,"CLIENT_BONUS_HISTORY_DELETED",{bonusId});res.json({taskManagement:next,message:"Bonus history item deleted."});}));
 app.post("/api/admin/clients/:id/tasks/reset",auth(staff),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const client=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);if(!client)return res.status(404).json({error:"Client not found."});
   const current=await getTaskManagementConfig(id);
