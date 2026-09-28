@@ -182,7 +182,15 @@ function taskPublic(t:any,includeValues=false){
   const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title||"").trim());
   const moviePosterUrl=String(t.moviePosterUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
-  const videoSource=hasAssignedVideo&&String(t.videoProvider||"youtube")==="youtube"?"https://www.youtube-nocookie.com/embed/"+encodeURIComponent(String(t.videoId)):null;
+  const provider=String(t.videoProvider||"youtube");
+  const rawVideoId=String(t.videoId||"");
+  const videoSource=hasAssignedVideo
+    ? provider==="youtube"
+      ?"https://www.youtube-nocookie.com/embed/"+encodeURIComponent(rawVideoId)
+      :provider==="direct"
+        ?rawVideoId
+        :null
+    :null;
   return {
     id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,sessionGeneratedTaskCount:t.session?.generatedTaskCount??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,videoId:t.videoId??null,videoTitle:t.videoTitle??null,movieTitle,moviePosterUrl,videoThumbnailUrl:t.videoThumbnailUrl??null,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
@@ -419,8 +427,15 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
   const task=await prisma.task.findFirst({where:{id,clientId}});
   if(!task)return res.status(404).json({error:"Task not found."});
   const config=await getTaskManagementConfig(clientId);if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
-  const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,sequence:{gte:config.cycleStartSequence,lt:config.cycleStartSequence+config.taskCount}},orderBy:{sequence:"asc"}});
-  if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before continuing."});
+  // Scope the ordering check to the task's own session. The previous
+  // cycle-wide sequence window could accidentally select an older pending
+  // task from another session and make a perfectly valid Confirm action return
+  // HTTP 409.
+  if(String(task.status)!==TaskStatus.PENDING)return res.json({success:true,user:safeUser(await prisma.user.findUniqueOrThrow({where:{id:clientId}})),task:taskPublic(task,true),message:"Task already completed."});
+  const first=task.sessionId
+    ?await prisma.task.findFirst({where:{sessionId:task.sessionId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}})
+    :await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
+  if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before continuing.",code:"TASK_ORDER_CONFLICT",task:taskPublic(first,true)});
   if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});
   if(!task.videoId)return res.status(400).json({error:"A valid video has not been assigned to this task yet.",code:"NO_PLAYABLE_VIDEO"});
   const requiredMs=Math.round(Math.max(0,Number(task.requiredWatchSeconds||2.5))*1000);const serverWatchedMs=Math.max(0,Number(task.watchAccumulatedMs||0));const elapsedSinceRevealMs=task.revealedAt?Math.max(0,Date.now()-task.revealedAt.getTime()):0;
