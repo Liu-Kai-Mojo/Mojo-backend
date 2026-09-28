@@ -376,7 +376,7 @@ app.post("/api/client/tasks/:id/video-retry",auth([Role.CLIENT]),asyncRoute(asyn
       videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
       videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
       videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,
-      videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none"
+      videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null
     }});
     res.json({task:taskPublic(updated,true)});
   }catch{return res.status(503).json({error:"This video isn't available right now. We're loading another one.",code:"TRENDING_VIDEO_UNAVAILABLE"});}
@@ -396,12 +396,12 @@ app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,
   const reportedDuration=d.durationSeconds&&d.durationSeconds>0?d.durationSeconds:knownDuration;
   const boundedPosition=reportedDuration>0?Math.min(reportedPosition,reportedDuration):reportedPosition;
   let accumulated=Math.max(0,Number(task.watchAccumulatedMs||0));
-  if(d.playing&&previousHeartbeat){
+  if(previousHeartbeat){
     const wallDeltaSeconds=Math.max(0,Math.min(3.5,(now.getTime()-previousHeartbeat.getTime())/1000));
     const positionDelta=boundedPosition-previousPosition;
     // Only credit forward playback that is physically plausible for the elapsed
     // server time. A large jump (seek) updates the baseline but contributes no
-    // watch credit for that heartbeat.
+    // watch credit for that heartbeat. Pausing still flushes the final interval.
     if(positionDelta>=0&&positionDelta<=wallDeltaSeconds+1.25){
       accumulated=Math.min(600000,accumulated+Math.round(Math.min(positionDelta,wallDeltaSeconds+0.25)*1000));
     }
