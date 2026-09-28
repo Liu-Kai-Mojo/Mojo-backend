@@ -188,6 +188,7 @@ model Task {
   videoCategoryId String?
   requiredWatchSeconds Float @default(2.5)
   watchAccumulatedMs Int @default(0)
+  watchLastPositionSeconds Float @default(0)
   watchHeartbeatAt DateTime?
   idempotencyKey String? @unique
   movieTitle     String?
