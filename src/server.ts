@@ -293,7 +293,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
   const active=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
   if(active){const pending=await prisma.task.findFirst({where:{sessionId:active.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});if(pending)return res.status(409).json({success:false,code:"PENDING_TASK_EXISTS",message:"You already have an active task session. Please finish the current task first.",task:taskPublic(pending,true),sessionId:active.id});await prisma.taskSession.update({where:{id:active.id},data:{status:"COMPLETED"}});}
   if(idempotencyKey){const prior=await prisma.task.findFirst({where:{clientId,idempotencyKey}});if(prior)return res.json({success:true,task:taskPublic(prior,true),sessionId:prior.sessionId,idempotent:true});}
-  const config=await getTaskManagementConfig(clientId);let videos:any[]=[];
+  let videos:any[]=[];
   try{videos=await getTrendingVideosForClient(clientId,config.taskCount);}
   catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",code,error instanceof Error?error.message:error);const unavailable=["YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXHAUSTED","YOUTUBE_API_ERROR","YOUTUBE_ZERO_RESULTS","YOUTUBE_CANDIDATES_REJECTED","NO_ELIGIBLE_HOLLYWOOD_MOVIE","NO_VALID_CACHED_MOVIE","NO_PLAYABLE_VIDEO","YOUTUBE_DISCOVERY_COOLDOWN"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your tasks right now. Please try again shortly.",code});}
   try{
@@ -331,7 +331,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
   ]);
   const availableBalanceCents=Math.max(0,user.balanceCents-(user.frozenCents??0));
   if(!task)return res.status(404).json({error:"Task not found."});
-  const config=await getTaskManagementConfig(clientId);
+  const config=await getTaskManagementConfig(clientId);if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
   const activeSession=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});const first=activeSession?await prisma.task.findFirst({where:{sessionId:activeSession.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}}):null;
   if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before opening another one."});
   let updated=task;
@@ -395,7 +395,7 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
   const d=z.object({rating:z.coerce.number().int().min(1).max(5).nullable().optional(),watchedSeconds:z.coerce.number().finite().min(0).optional()}).parse(req.body||{});
   const task=await prisma.task.findFirst({where:{id,clientId}});
   if(!task)return res.status(404).json({error:"Task not found."});
-  const config=await getTaskManagementConfig(clientId);
+  const config=await getTaskManagementConfig(clientId);if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
   const first=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,sequence:{gte:config.cycleStartSequence,lt:config.cycleStartSequence+config.taskCount}},orderBy:{sequence:"asc"}});
   if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before continuing."});
   if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});
