@@ -186,7 +186,7 @@ function taskPublic(t:any,includeValues=false){
   return {
     id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,sessionGeneratedTaskCount:t.session?.generatedTaskCount??null,taskType:t.taskType||"STANDARD",commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,videoId:t.videoId??null,videoTitle:t.videoTitle??null,movieTitle,moviePosterUrl,videoThumbnailUrl:t.videoThumbnailUrl??null,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
-    requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,
+    requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,watchPositionSeconds:Math.max(0,Number(t.watchLastPositionSeconds||0)),
     movie:(hasAssignedVideo||t.movieTitle||t.moviePosterUrl)?{id:t.movieId??null,title:movieTitle,posterUrl:moviePosterUrl,releaseDate:movieReleaseDate}:null,
     video:hasAssignedVideo?{
       provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||movieTitle,
@@ -382,13 +382,36 @@ app.post("/api/client/tasks/:id/video-retry",auth([Role.CLIENT]),asyncRoute(asyn
   }catch{return res.status(503).json({error:"This video isn't available right now. We're loading another one.",code:"TRENDING_VIDEO_UNAVAILABLE"});}
 }));
 app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
-  const id=param(req,"id");const clientId=res.locals.auth.sub;const d=z.object({playing:z.boolean()}).parse(req.body||{});
+  const id=param(req,"id");const clientId=res.locals.auth.sub;
+  const d=z.object({
+    playing:z.boolean(),
+    positionSeconds:z.coerce.number().finite().min(0).max(86400).optional(),
+    durationSeconds:z.coerce.number().finite().min(0).max(86400).optional()
+  }).parse(req.body||{});
   const task=await prisma.task.findFirst({where:{id,clientId,status:TaskStatus.PENDING}});
   if(!task||!task.revealedAt||!task.videoId)return res.status(404).json({error:"Task not found."});
-  const now=new Date();const previous=task.watchHeartbeatAt;let accumulated=task.watchAccumulatedMs||0;
-  if(previous){accumulated=Math.min(600000,accumulated+Math.max(0,Math.min(3500,now.getTime()-previous.getTime())));}
-  const updated=await prisma.task.update({where:{id},data:{watchAccumulatedMs:accumulated,watchHeartbeatAt:d.playing?now:null}});
-  res.json({success:true,watchSeconds:updated.watchAccumulatedMs/1000,requiredWatchSeconds:updated.requiredWatchSeconds});
+  const now=new Date();const previousHeartbeat=task.watchHeartbeatAt;const previousPosition=Math.max(0,Number(task.watchLastPositionSeconds||0));
+  const reportedPosition=d.positionSeconds===undefined?previousPosition:d.positionSeconds;
+  const knownDuration=Math.max(0,Number(task.videoDurationSeconds||0));
+  const reportedDuration=d.durationSeconds&&d.durationSeconds>0?d.durationSeconds:knownDuration;
+  const boundedPosition=reportedDuration>0?Math.min(reportedPosition,reportedDuration):reportedPosition;
+  let accumulated=Math.max(0,Number(task.watchAccumulatedMs||0));
+  if(d.playing&&previousHeartbeat){
+    const wallDeltaSeconds=Math.max(0,Math.min(3.5,(now.getTime()-previousHeartbeat.getTime())/1000));
+    const positionDelta=boundedPosition-previousPosition;
+    // Only credit forward playback that is physically plausible for the elapsed
+    // server time. A large jump (seek) updates the baseline but contributes no
+    // watch credit for that heartbeat.
+    if(positionDelta>=0&&positionDelta<=wallDeltaSeconds+1.25){
+      accumulated=Math.min(600000,accumulated+Math.round(Math.min(positionDelta,wallDeltaSeconds+0.25)*1000));
+    }
+  }
+  const updated=await prisma.task.update({where:{id},data:{
+    watchAccumulatedMs:accumulated,
+    watchLastPositionSeconds:boundedPosition,
+    watchHeartbeatAt:d.playing?now:null
+  }});
+  res.json({success:true,watchSeconds:updated.watchAccumulatedMs/1000,requiredWatchSeconds:updated.requiredWatchSeconds,positionSeconds:updated.watchLastPositionSeconds});
 }));
 app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
