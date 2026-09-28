@@ -3,7 +3,7 @@ import { uniqueSettingId } from "./utils/codes.js";
 import { getEligibleHollywoodMovies, isEligibleHollywoodMovie, moviePosterIsUsable, type EligibleMovie } from "./movieCatalog.js";
 
 export type TrendingVideo = {
-  provider:"youtube";
+  provider:"youtube"|"direct";
   videoId:string;
   title:string;
   description:string;
@@ -81,6 +81,17 @@ function parseDuration(value:string){
 }
 function clean(value:string){return value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();}
 export function normalizeMovieTitle(value:string){const raw=clean(value).replace(/\s+/g," ");if(!raw)return "Movie";return raw.replace(/\s*[|–—:-]\s*(?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+|movie\s+)*(?:official\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?$/i,"").replace(/\s*\((?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?\)$/i,"").replace(/\s+\b(?:official|new|latest|exclusive|final)\s+(?:trailer|teaser)\b.*$/i,"").replace(/\s*[-–—|]+\s*$/,"").trim()||raw;}
+const OPEN_LICENSED_VIDEO_FALLBACKS:TrendingVideo[]=[
+  {provider:"direct",videoId:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny_Trailer_1080p.ogv",title:"Big Buck Bunny — Open Movie Trailer",description:"Creative Commons open movie trailer.",channelId:"blender-open-movie",channelTitle:"Blender Foundation",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny.jpg",durationSeconds:33,publishedAt:"2008-03-01T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:80,movieId:"open-bbb",movieTitle:"Big Buck Bunny",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny.jpg",movieReleaseDate:"2008-03-01T00:00:00.000Z",movieYear:2008,movieGenre:"Animation, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
+  {provider:"direct",videoId:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel_trailer-1080p.ogv",title:"Sintel — Open Movie Trailer",description:"Creative Commons open movie trailer.",channelId:"blender-open-movie",channelTitle:"Blender Foundation",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel.jpg",durationSeconds:52,publishedAt:"2010-05-13T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:79,movieId:"open-sintel",movieTitle:"Sintel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel.jpg",movieReleaseDate:"2010-05-13T00:00:00.000Z",movieYear:2010,movieGenre:"Fantasy, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
+  {provider:"direct",videoId:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_clip.ogv",title:"Tears of Steel — Open Movie Scene",description:"Creative Commons open movie scene.",channelId:"blender-open-movie",channelTitle:"Blender Foundation",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_frame_05_6a.jpg",durationSeconds:60,publishedAt:"2012-09-26T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:78,movieId:"open-tos",movieTitle:"Tears of Steel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_frame_05_6a.jpg",movieReleaseDate:"2012-09-26T00:00:00.000Z",movieYear:2012,movieGenre:"Science Fiction, Action",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"}
+];
+function openLicensedFallback(clientId:string,count:number){
+  const shuffled=[...OPEN_LICENSED_VIDEO_FALLBACKS].sort(()=>Math.random()-0.5);
+  const recent=new Set<string>();
+  return Array.from({length:Math.max(1,count)},(_,i)=>shuffled[i%shuffled.length]).filter((v,i)=>i<Math.max(1,count));
+}
+
 const DEFAULT_INDIA_TITLE_EXCLUSIONS="";
 const DEFAULT_INDIA_CHANNEL_EXCLUSIONS="";
 
@@ -398,15 +409,31 @@ async function discoverAndCache(cfg:TrendingConfig){
   }
 }
 export async function getTrendingVideosForClient(clientId:string,count:number){
-  const cfg=await config();if(!cfg.enabled)throw providerError("YOUTUBE_API_ERROR","Movie trailer tasks are temporarily unavailable.");
-  await ensureVerifiedHollywoodCache();
-  const pool=await loadCache(cfg);if(pool.length)return selectMany(clientId,pool,count,cfg);
-  const stale=await loadCache(cfg,true);if(stale.length)return selectMany(clientId,stale,count,cfg);
-  try{const discovered=await discoverAndCache(cfg);return selectMany(clientId,discovered,count,cfg);}
-  catch(error){const fallback=await loadCache(cfg,true);if(fallback.length)return selectMany(clientId,fallback,count,cfg);throw error;}
+  const cfg=await config();
+  if(cfg.enabled){
+    await ensureVerifiedHollywoodCache();
+    const pool=await loadCache(cfg);if(pool.length)return selectMany(clientId,pool,count,cfg);
+    const stale=await loadCache(cfg,true);if(stale.length)return selectMany(clientId,stale,count,cfg);
+    try{const discovered=await discoverAndCache(cfg);if(discovered.length)return selectMany(clientId,discovered,count,cfg);}
+    catch(error){const fallback=await loadCache(cfg,true);if(fallback.length)return selectMany(clientId,fallback,count,cfg);}
+  }
+  // Provider-independent fallback: open-licensed cinematic material can be
+  // replayed indefinitely without YouTube search quota or discovery cooldowns.
+  return openLicensedFallback(clientId,count);
 }
 export async function getTrendingVideoForClient(clientId:string){return (await getTrendingVideosForClient(clientId,1))[0];}
-export async function getAlternativeVideoForTask(clientId:string,movieTitle:string|null,excludeVideoId:string|null){const cfg=await config();await ensureVerifiedHollywoodCache();const pool=await loadCache(cfg);const sameMovie=pool.filter(v=>(!movieTitle||v.movieTitle===movieTitle)&&v.videoId!==excludeVideoId);if(sameMovie.length)return (await selectMany(clientId,sameMovie,1,cfg))[0];const fallback=pool.filter(v=>v.videoId!==excludeVideoId);if(fallback.length)return (await selectMany(clientId,fallback,1,cfg))[0];return getTrendingVideoForClient(clientId);}
+export async function getAlternativeVideoForTask(clientId:string,movieTitle:string|null,excludeVideoId:string|null){
+  const cfg=await config();if(cfg.enabled){
+    await ensureVerifiedHollywoodCache();
+    const pool=await loadCache(cfg);
+    const sameMovie=pool.filter(v=>(!movieTitle||v.movieTitle===movieTitle)&&v.videoId!==excludeVideoId);
+    if(sameMovie.length)return (await selectMany(clientId,sameMovie,1,cfg))[0];
+    const fallback=pool.filter(v=>v.videoId!==excludeVideoId);
+    if(fallback.length)return (await selectMany(clientId,fallback,1,cfg))[0];
+  }
+  const pool=openLicensedFallback(clientId,6).filter(v=>v.videoId!==excludeVideoId);
+  return pool[Math.floor(Math.random()*pool.length)]||OPEN_LICENSED_VIDEO_FALLBACKS[0];
+}
 export async function getCurrentTrailerCandidates(){
   const cfg=await config();if(!cfg.enabled)return [];
   return loadCache(cfg,true);
