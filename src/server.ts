@@ -448,7 +448,14 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       const available=Math.max(0,user.balanceCents-(user.frozenCents??0));
 
       if(String(current.status)!==TaskStatus.PENDING)return {task:current};
-      if(Math.max(0,Number(current.reservedAmountCents||0))>0&&current.revealedAt)return {task:current};
+       const existingReservation=Math.max(0,Number(current.reservedAmountCents||0));
+       if(existingReservation>0){
+         if(!current.revealedAt){
+           const repaired=await tx.task.update({where:{id:current.id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
+           return {task:repaired};
+         }
+         return {task:current};
+       }
 
       const isCombination=String(current.taskType)==="COMBINATION";
       let amount=0;
