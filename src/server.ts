@@ -18,14 +18,19 @@ type RealtimeClient = { response: express.Response; heartbeat: NodeJS.Timeout };
 const realtimeClients = new Map<string, Set<RealtimeClient>>();
 function addRealtimeClient(subject:string,res:express.Response){
   const bucket=realtimeClients.get(subject)||new Set<RealtimeClient>();
-  const heartbeat=setInterval(()=>{try{res.write(": heartbeat\\n\\n");}catch{}},25000); heartbeat.unref();
+  const heartbeat=setInterval(()=>{try{res.write(": heartbeat\
+\
+");}catch{}},25000); heartbeat.unref();
   bucket.add({response:res,heartbeat}); realtimeClients.set(subject,bucket);
   const cleanup=()=>{clearInterval(heartbeat);bucket.forEach(x=>{if(x.response===res)bucket.delete(x)});if(!bucket.size)realtimeClients.delete(subject);};
   res.on("close",cleanup); return cleanup;
 }
 function publishRealtime(subject:string,event:string,payload:unknown){
   const bucket=realtimeClients.get(subject); if(!bucket)return;
-  const packet=`event: ${event}\\ndata: ${JSON.stringify(payload)}\\n\\n`;
+  const packet=`event: ${event}\
+data: ${JSON.stringify(payload)}\
+\
+`;
   for(const client of [...bucket]){try{client.response.write(packet);}catch{clearInterval(client.heartbeat);bucket.delete(client);}}
 }
 function walletRequestPublic(row:any){return {id:row.id,type:row.type,status:row.status,uid:row.userId,fullName:row.user?.name||"",identifier:row.user?.identifier||"",amountCents:row.amountCents,createdAt:row.createdAt,updatedAt:row.updatedAt};}
@@ -468,7 +473,8 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
         }
         rateBps=1500;
       }else{
-        const standardBalanceCap=Math.min(available,Math.max(0,Number(active.balanceSnapshotCents||available)));\n        const generated=randomTaskAmount(standardBalanceCap,0);
+        const standardBalanceCap=Math.min(available,Math.max(0,Number(active.balanceSnapshotCents||available)));
+        const generated=randomTaskAmount(standardBalanceCap,0);
         if(generated===null)throw Object.assign(new Error("Your balance is too low to start this task. Please add funds before continuing."),{code:"LOW_BALANCE"});
         amount=generated;
       }
@@ -590,7 +596,10 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
 app.get("/api/client/events",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const clientId=res.locals.auth.sub;
   res.status(200).setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-cache, no-transform");res.setHeader("Connection","keep-alive");res.flushHeaders?.();
-  addRealtimeClient(clientId,res);res.write(`event: ready\\ndata: ${JSON.stringify({ok:true,subject:clientId})}\\n\\n`);
+  addRealtimeClient(clientId,res);res.write(`event: ready\
+data: ${JSON.stringify({ok:true,subject:clientId})}\
+\
+`);
 }));
 app.get("/api/client/wallet-requests",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const rows=await prisma.walletRequest.findMany({where:{userId:res.locals.auth.sub},orderBy:{createdAt:"desc"},take:50});
@@ -653,7 +662,10 @@ const staff=[Role.OWNER,Role.ADMIN];
 app.get("/api/admin/events",auth([Role.ADMIN]),asyncRoute(async(_req,res)=>{
   const adminId=res.locals.auth.sub;
   res.status(200).setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-cache, no-transform");res.setHeader("Connection","keep-alive");res.flushHeaders?.();
-  addRealtimeClient(adminId,res);res.write(`event: ready\\ndata: ${JSON.stringify({ok:true,subject:adminId})}\\n\\n`);
+  addRealtimeClient(adminId,res);res.write(`event: ready\
+data: ${JSON.stringify({ok:true,subject:adminId})}\
+\
+`);
 }));
 app.get("/api/admin/wallet-requests",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
   const uid=String(req.query.uid||"").trim();
