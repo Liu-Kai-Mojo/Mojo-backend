@@ -330,11 +330,23 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
         const pending=await tx.task.findFirst({where:{sessionId:active.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
         if(pending){
           if(pending.reservedAmountCents>0)return {session:active,task:pending,resumed:true};
-          if(pending.taskType==="COMBINATION"&&available<pending.amountCents)return {session:active,task:pending,resumed:true,insufficientCombination:true};
-          if(pending.amountCents<5000||available<pending.amountCents)throw Object.assign(new Error("Your available balance is not enough for this task. Please add funds before continuing."),{code:"LOW_BALANCE"});
-          await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:pending.amountCents}}});
-          const reserved=await tx.task.update({where:{id:pending.id},data:{reservedAmountCents:pending.amountCents,revealedAt:pending.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
-          await tx.taskSession.update({where:{id:active.id},data:{reservedAmountCents:{increment:pending.amountCents}}});
+          if(pending.taskType==="COMBINATION"){
+            if(available<pending.amountCents)return {session:active,task:pending,resumed:true,insufficientCombination:true};
+            const rateBps=1500;const commission=Math.max(1,Math.round(pending.amountCents*rateBps/10000));
+            await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:pending.amountCents}}});
+            const reserved=await tx.task.update({where:{id:pending.id},data:{commissionCents:commission,ticketCount:calculateTicketCount(pending.amountCents),commissionRateBps:rateBps,reservedAmountCents:pending.amountCents,revealedAt:pending.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
+            await tx.taskSession.update({where:{id:active.id},data:{reservedAmountCents:{increment:pending.amountCents},totalExpectedCommissionCents:{increment:commission}}});
+            return {session:active,task:reserved,resumed:true};
+          }
+          // Every STANDARD task is priced when it becomes the current task.
+          // This uses the live available balance instead of dividing the
+          // balance by the remaining task count.
+          const amount=randomTaskAmount(available,0);
+          if(!amount)throw Object.assign(new Error("Your available balance is not enough for this task. Please add funds before continuing."),{code:"LOW_BALANCE"});
+          const rateBps=vipRowRateBps(pending.commissionRateBps,active.vipLevel);const commission=Math.max(1,Math.round(amount*rateBps/10000));
+          await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:amount}}});
+          const reserved=await tx.task.update({where:{id:pending.id},data:{amountCents:amount,commissionCents:commission,commissionRateBps:rateBps,ticketCount:calculateTicketCount(amount),reservedAmountCents:amount,revealedAt:pending.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
+          await tx.taskSession.update({where:{id:active.id},data:{reservedAmountCents:{increment:amount},totalTaskAmountCents:{increment:amount},totalExpectedCommissionCents:{increment:commission}}});
           return {session:active,task:reserved,resumed:true};
         }
         await tx.taskSession.update({where:{id:active.id},data:{status:"COMPLETED"}});
@@ -351,10 +363,11 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       const assignments=config.combinationTaskAssignments.filter(a=>a.round===round);const taskData:any[]=[];const amounts:number[]=[];
       for(let i=0;i<taskCount;i++){
         const localSequence=i+1;const assignment=assignments.find(a=>a.sequence===localSequence);const combination=Boolean(assignment)||(!assignment&&config.combinationTaskSequences.includes(localSequence)&&config.combinationTaskRound===round);
-        const amount=combination?Math.max(5000,assignment?.amountCents||config.combinationTaskAmountCents):randomTaskAmount(available,0);
-        if(!amount||amount<5000)throw Object.assign(new Error("A safe task amount could not be generated from the current available balance."),{code:"TASK_AMOUNT_INVALID"});
+        const amount=combination?Math.max(5000,assignment?.amountCents||config.combinationTaskAmountCents):(i===0?randomTaskAmount(available,0):0);
+        if(combination&&(!amount||amount<5000))throw Object.assign(new Error("A safe combination task amount could not be generated."),{code:"TASK_AMOUNT_INVALID"});
+        if(i===0&&(!amount||amount<5000))throw Object.assign(new Error("A safe task amount could not be generated from the current available balance."),{code:"TASK_AMOUNT_INVALID"});
         if(!combination&&amount>available)throw Object.assign(new Error("Your available balance is not enough to start this task."),{code:"LOW_BALANCE"});
-        amounts.push(amount);const rateBps=combination?1500:vipRule.commissionRateBps;const commission=Math.max(1,Math.round(amount*rateBps/10000));const video=videos[i];
+        amounts.push(amount||0);const rateBps=combination?1500:vipRule.commissionRateBps;const commission=amount>0?Math.max(1,Math.round(amount*rateBps/10000)):0;const video=videos[i];
         taskData.push({id:await uniqueTaskId(),clientId,sessionId,sequence:sequenceStart+i,title:normalizeMovieTitle(video.movieTitle||video.title),taskType:combination?"COMBINATION":"STANDARD",commissionRateBps:rateBps,amountCents:amount,commissionCents:commission,ticketCount:calculateTicketCount(amount),reservedAmountCents:0,isLucky:combination,videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:i===0&&idempotencyKey?idempotencyKey:null});
       }
       const firstData=taskData[0];const reserveFirst=firstData.amountCents<=available;
@@ -396,7 +409,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       const message=error instanceof Error?error.message:"Trending videos are temporarily unavailable.";
       return res.status(503).json({error:message,code:"TRENDING_VIDEO_UNAVAILABLE"});
     }
-  }else if(task.amountCents>availableBalanceCents){
+  }else if(task.amountCents>availableBalanceCents+Math.max(0,Number(task.reservedAmountCents||0))){
     return res.status(409).json({error:"Your available balance is not enough for this task. Please add funds before continuing."});
   }else if(!task.videoId){
     try{
