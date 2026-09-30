@@ -9,6 +9,7 @@ export const uniqueHistoryId=()=>uniqueCode(id=>prisma.movieHistory.findUnique({
 export const uniqueMessageId=()=>uniqueCode(id=>prisma.message.findUnique({where:{id}}));
 export const uniqueSettingId=()=>uniqueCode(id=>prisma.setting.findUnique({where:{id}}));
 export const uniqueWalletTransactionId=()=>uniqueCode(id=>prisma.walletTransaction.findUnique({where:{id}}));
+export const uniqueWalletRequestId=()=>uniqueCode(id=>prisma.walletRequest.findUnique({where:{id}}));
 export const uniqueTaskId=()=>uniqueCode(id=>prisma.task.findUnique({where:{id}}));
 export const uniqueInviteCode=()=>uniqueCode(code=>prisma.user.findUnique({where:{inviteCode:code}}));
 export const uniqueAuditLogId=()=>uniqueCode(id=>prisma.auditLog.findUnique({where:{id}}));
