@@ -193,6 +193,19 @@ function calculateTicketCount(taskAmountCents:number){
   return randomInt(min,Math.max(min,max)+1);
 }
 function vipRowRateBps(current:number,vipLevel:string){const n=Math.trunc(Number(current||0));return n>0?n:defaultVipRule(vipLevel).commissionRateBps;}
+function nextUniqueTicketCount(taskAmountCents:number,used:Set<number>){
+  let candidate=calculateTicketCount(taskAmountCents);
+  for(let attempt=0;attempt<24&&used.has(candidate);attempt++)candidate=calculateTicketCount(taskAmountCents);
+  if(used.has(candidate)){
+    const start=Math.max(2,Math.min(150,candidate));
+    for(let offset=1;offset<=149;offset++){
+      const next=start+offset<=150?start+offset:Math.max(2,start-offset);
+      if(!used.has(next)){candidate=next;break;}
+    }
+  }
+  used.add(candidate);
+  return candidate;
+}
 async function upsertDefaultTaskPriceSettings(){
   const defaults:{key:string;value:string}[]=[
     {key:"task_price_min_percent",value:"90"},
@@ -347,11 +360,13 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
         const pending=await tx.task.findFirst({where:{sessionId:active.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
         if(pending){
           if(pending.reservedAmountCents>0)return {session:active,task:pending,resumed:true};
+          const existingTicketRows=await tx.task.findMany({where:{sessionId:active.id,id:{not:pending.id}},select:{ticketCount:true}});
+          const usedTicketCounts=new Set<number>(existingTicketRows.map(row=>Math.max(1,Number(row.ticketCount||0))).filter(n=>n>1));
           if(pending.taskType==="COMBINATION"){
             if(available<pending.amountCents)return {session:active,task:pending,resumed:true,insufficientCombination:true};
             const rateBps=1500;const commission=Math.max(1,Math.round(pending.amountCents*rateBps/10000));
             await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:pending.amountCents}}});
-            const reserved=await tx.task.update({where:{id:pending.id},data:{commissionCents:commission,ticketCount:calculateTicketCount(pending.amountCents),commissionRateBps:rateBps,reservedAmountCents:pending.amountCents,revealedAt:pending.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
+            const reserved=await tx.task.update({where:{id:pending.id},data:{commissionCents:commission,ticketCount:nextUniqueTicketCount(pending.amountCents,usedTicketCounts),commissionRateBps:rateBps,reservedAmountCents:pending.amountCents,revealedAt:pending.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
             await tx.taskSession.update({where:{id:active.id},data:{reservedAmountCents:{increment:pending.amountCents},totalExpectedCommissionCents:{increment:commission}}});
             return {session:active,task:reserved,resumed:true};
           }
@@ -394,6 +409,8 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       if(reserveFirst){await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:firstData.amountCents}}});firstData.reservedAmountCents=firstData.amountCents;}
       const totalAmount=amounts.reduce((n,v)=>n+v,0);const totalCommission=taskData.reduce((n,v)=>n+v.commissionCents,0);
       const session=await tx.taskSession.create({data:{id:sessionId,clientId,vipLevel:config.vipLevel,balanceSnapshotCents:user.balanceCents,generatedTaskCount:taskCount,totalTaskAmountCents:totalAmount,totalExpectedCommissionCents:totalCommission,resetNumber:config.resetCount,round,dayKey,reservedAmountCents:reserveFirst?firstData.amountCents:0,taskCountOverride:taskCount,amountOverrideCents:null,combinationTaskCount:taskData.filter(t=>t.taskType==="COMBINATION").length,combinationTaskAmountCents:config.combinationTaskAmountCents,combinationCommissionRateBps:1500}});
+     const usedTicketCounts=new Set<number>();
+     for(const data of taskData)data.ticketCount=nextUniqueTicketCount(data.amountCents,usedTicketCounts);
       const taskRows:any[]=[];for(const data of taskData)taskRows.push(await tx.task.create({data}));return {session,tasks:taskRows};
     },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
     const resultTasks:any[]=Array.isArray(result.tasks)?result.tasks:[result.task];let first=resultTasks[0];if(first.reservedAmountCents>0&&!first.revealedAt)first=await prisma.task.update({where:{id:first.id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
@@ -450,6 +467,9 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       }
 
       const commission=Math.max(1,Math.round(amount*rateBps/10000));
+       const existingTicketRows=await tx.task.findMany({where:{sessionId:active.id,id:{not:id}},select:{ticketCount:true}});
+       const usedTicketCounts=new Set<number>(existingTicketRows.map(row=>Math.max(1,Number(row.ticketCount||0))).filter(n=>n>1));
+       const ticketCount=nextUniqueTicketCount(amount,usedTicketCounts);
       const videoData=preparedVideo?{
         videoProvider:preparedVideo.provider,videoId:preparedVideo.videoId,videoTitle:preparedVideo.title,movieTitle:preparedVideo.movieTitle,moviePosterUrl:preparedVideo.moviePosterUrl,movieReleaseDate:preparedVideo.movieReleaseDate?new Date(preparedVideo.movieReleaseDate):null,videoChannelId:preparedVideo.channelId||null,videoChannelTitle:preparedVideo.channelTitle,
         videoThumbnailUrl:preparedVideo.thumbnailUrl,videoDurationSeconds:preparedVideo.durationSeconds,videoPublishedAt:preparedVideo.publishedAt?new Date(preparedVideo.publishedAt):null,videoCategoryId:preparedVideo.categoryId,
@@ -458,7 +478,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
 
       await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:amount}}});
       const updated=await tx.task.update({where:{id},data:{
-        amountCents:amount,commissionCents:commission,commissionRateBps:rateBps,ticketCount:calculateTicketCount(amount),reservedAmountCents:amount,
+        amountCents:amount,commissionCents:commission,commissionRateBps:rateBps,ticketCount,reservedAmountCents:amount,
         revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null,...videoData
       }});
       await tx.taskSession.update({where:{id:active.id},data:{
