@@ -196,7 +196,7 @@ function taskPublic(t:any,includeValues=false){
   const completed=String(t.status||"")===TaskStatus.COMPLETED;
   const hasAssignedVideo=Boolean(t.videoId);
   const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title||"").trim());
-  const moviePosterUrl=String(t.moviePosterUrl||"").trim();
+  const moviePosterUrl=String(t.moviePosterUrl||t.videoThumbnailUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
   const provider=String(t.videoProvider||"youtube");
   const rawVideoId=String(t.videoId||"");
@@ -412,8 +412,15 @@ app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,
     positionSeconds:z.coerce.number().finite().min(0).max(86400).optional(),
     durationSeconds:z.coerce.number().finite().min(0).max(86400).optional()
   }).parse(req.body||{});
-  const task=await prisma.task.findFirst({where:{id,clientId,status:TaskStatus.PENDING}});
-  if(!task||!task.revealedAt||!task.videoId)return res.status(404).json({error:"Task not found."});
+  const task=await prisma.task.findFirst({where:{id,clientId}});
+  if(!task)return res.status(404).json({error:"Task not found."});
+  // A client can keep a modal open briefly after the task is completed elsewhere.
+  // Treat that stale heartbeat as a terminal no-op instead of generating a 404
+  // loop in the browser console.
+  if(String(task.status)!==TaskStatus.PENDING){
+    return res.json({success:true,terminal:true,watchSeconds:Math.max(0,Number(task.watchAccumulatedMs||0))/1000,requiredWatchSeconds:task.requiredWatchSeconds,positionSeconds:Math.max(0,Number(task.watchLastPositionSeconds||0)});
+  }
+  if(!task.revealedAt||!task.videoId)return res.status(409).json({error:"Task video is not ready yet.",code:"TASK_VIDEO_NOT_READY"});
   const now=new Date();const previousHeartbeat=task.watchHeartbeatAt;const previousPosition=Math.max(0,Number(task.watchLastPositionSeconds||0));
   const reportedPosition=d.positionSeconds===undefined?previousPosition:d.positionSeconds;
   const knownDuration=Math.max(0,Number(task.videoDurationSeconds||0));
