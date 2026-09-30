@@ -152,7 +152,7 @@ async function getTaskManagementConfig(clientId:string):Promise<TaskManagementCo
   let bonus:BonusConfig|null=null;try{const raw=parsed.bonus??null;if(raw&&typeof raw==="object"){const content=String(raw.content??"").trim();const quickActions=Array.isArray(raw.quickActions)?raw.quickActions.map((v:any)=>String(v??"").trim()).filter(Boolean).slice(0,4):[];const date=String(raw.date??"").trim();if(content||quickActions.length||date)bonus={content,quickActions,date};}}catch{}
   return {taskCount,requiredDepositCents:clampMoneyCents(Number(parsed.requiredDepositCents??0)),amountCents:clampMoneyCents(Number(parsed.amountCents??0)),vipLevel,resetCount:Math.max(0,Math.min(100000,Math.trunc(Number(parsed.resetCount??0)))),cycleStartSequence:Math.max(1,Math.trunc(Number(cycleRow?.value||parsed.cycleStartSequence||1))),combinationTaskCount:assignments.length||sequences.length,combinationTaskAmountCents:clampMoneyCents(Number(parsed.combinationTaskAmountCents??0)),combinationTaskSequences:sequences,combinationCommissionRateBps:1500,combinationTaskRound:fallbackRound,combinationTaskAssignments:assignments,bonus};
 }
-async function readBonusHistoryasync function readBonusHistory(clientId:string):Promise<any[]>{const row=await prisma.setting.findUnique({where:{key:bonusHistoryKey(clientId)}});try{return row?.value?JSON.parse(row.value):[]}catch{return []}}
+async function readBonusHistory(clientId:string):Promise<any[]>{const row=await prisma.setting.findUnique({where:{key:bonusHistoryKey(clientId)}});try{return row?.value?JSON.parse(row.value):[]}catch{return []}}
 async function writeBonusHistory(db:any,clientId:string,history:any[]){await db.setting.upsert({where:{key:bonusHistoryKey(clientId)},create:{id:await uniqueSettingId(),key:bonusHistoryKey(clientId),value:JSON.stringify(history.slice(-30))},update:{value:JSON.stringify(history.slice(-30))}})}
 async function saveTaskManagementConfig(db:any,clientId:string,config:TaskManagementConfig){
   await db.setting.upsert({where:{key:taskConfigKey(clientId)},create:{id:await uniqueSettingId(),key:taskConfigKey(clientId),value:JSON.stringify(config)},update:{value:JSON.stringify(config)}});
@@ -166,7 +166,7 @@ async function taskPriceConfig(){
   const num=(key:string,fallback:number)=>{const db=values.get(key);const envKey=key.toUpperCase();const env=Number(process.env[envKey]);return Number.isFinite(db??NaN)?Number(db):Number.isFinite(env)?env:fallback;};
   return {minPercent:Math.max(90,num("task_price_min_percent",90)),maxPercent:Math.min(100,Math.max(90,num("task_price_max_percent",100))),minAbsoluteCents:Math.max(5000,Math.round(num("task_price_min_absolute_cents",5000))),maxAbsoluteCents:Math.max(5000,Math.round(num("task_price_max_absolute_cents",100000000))),minRemainingBalanceCents:Math.max(0,Math.round(num("task_price_min_remaining_balance_cents",0)))};
 }
-function secureRandomCentsfunction secureRandomCents(min:number,max:number){
+function secureRandomCents(min:number,max:number){
   if(max<=min)return min;
   return min+randomInt(max-min+1);
 }
@@ -176,7 +176,7 @@ async function randomTaskAmount(balanceCents:number,frozenCents=0){
   return secureRandomCents(Math.max(5000,Math.floor(availableBalance*0.90)),availableBalance);
 }
 function calculateTicketCount(taskAmountCents:number){return Math.max(1,Math.min(200,Math.ceil(Math.max(0,taskAmountCents)/5000)));}
-async function upsertDefaultTaskPriceSettingsasync function upsertDefaultTaskPriceSettings(){
+async function upsertDefaultTaskPriceSettings(){
   const defaults:{key:string;value:string}[]=[
     {key:"task_price_min_percent",value:"90"},
     {key:"task_price_max_percent",value:"100"},
@@ -368,7 +368,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
     return res.status(201).json({success:true,session:{id:result.session.id,vipLevel:result.session.vipLevel,balanceSnapshotCents:result.session.balanceSnapshotCents,generatedTaskCount:result.session.generatedTaskCount,resetNumber:result.session.resetNumber,round:result.session.round,dayKey:result.session.dayKey,totalTaskAmountCents:result.session.totalTaskAmountCents,totalExpectedCommissionCents:result.session.totalExpectedCommissionCents,reservedAmountCents:result.session.reservedAmountCents},tasks:result.tasks.map(t=>taskPublic(t,false)),task:taskPublic(first,true),taskConfig:{taskCount:result.session.generatedTaskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,round:result.session.round,combinationTaskAssignments:config.combinationTaskAssignments}});
   }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",{operation:"task-start",code,error:error instanceof Error?error.message:String(error)});if(code==="DAILY_ROUND_LIMIT"||code==="LOW_BALANCE"||code==="TASK_AMOUNT_INVALID")return res.status(409).json({success:false,error:error instanceof Error?error.message:"Your available balance is not enough to start this task.",code});const unavailable=["YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXHAUSTED","YOUTUBE_API_ERROR","YOUTUBE_ZERO_RESULTS","YOUTUBE_CANDIDATES_REJECTED","NO_ELIGIBLE_HOLLYWOOD_MOVIE","NO_VALID_CACHED_MOVIE","NO_PLAYABLE_VIDEO","NO_PLAYABLE_MOVIE_VIDEO","VIDEO_NOT_PLAYABLE","VIDEO_NOT_EMBEDDABLE","VIDEO_UNAVAILABLE","POSTER_UNAVAILABLE","MOVIE_NOT_FOUND","YOUTUBE_DISCOVERY_COOLDOWN"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your movie right now. Please try again shortly.",code});}
 }));
-app.post("/api/client/tasks/:id/reveal"app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
   const [task,user]=await Promise.all([
     prisma.task.findFirst({where:{id,clientId}}),
@@ -492,7 +492,7 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
     return res.json({user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task completed and your balance has been updated."});
   }catch(error){const code=String((error as any)?.code||"TASK_COMPLETION_FAILED");const status=code==="NOT_FOUND"?404:code==="TASK_ORDER_CONFLICT"||code==="WATCH_TIME_INCOMPLETE"||code==="NO_PLAYABLE_VIDEO"||code==="RESERVATION_MISMATCH"?409:500;return res.status(status).json({success:false,error:error instanceof Error?error.message:"Unable to complete this task.",code});}
 }));
-app.get("/api/client/events"app.get("/api/client/events",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+app.get("/api/client/events",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const clientId=res.locals.auth.sub;
   res.status(200).setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-cache, no-transform");res.setHeader("Connection","keep-alive");res.flushHeaders?.();
   addRealtimeClient(clientId,res);res.write(`event: ready\\ndata: ${JSON.stringify({ok:true,subject:clientId})}\\n\\n`);
