@@ -148,7 +148,12 @@ async function getTaskManagementConfig(clientId:string):Promise<TaskManagementCo
     if(legacyAmount>=5000)for(const sequence of legacySequences)assignmentMap.set(fallbackRound+":"+sequence,{round:fallbackRound,sequence,amountCents:legacyAmount});
   }
   const assignments=Array.from(assignmentMap.values()).sort((a,b)=>a.round-b.round||a.sequence-b.sequence);
-  const sequences=Array.from(new Set<number>([...legacySequences,...assignments.map(v=>v.sequence)])).sort((a,b)=>a-b);
+  // A sequence by itself is not a Combination task. Combination mode becomes
+  // active only when Admin has supplied an actual Need Amount.
+  const legacyAmount=clampMoneyCents(Number(parsed.combinationTaskAmountCents??0));
+  const sequences=legacyAmount>=5000
+    ?Array.from(new Set<number>([...legacySequences,...assignments.map(v=>v.sequence)])).sort((a,b)=>a-b)
+    :Array.from(new Set<number>(assignments.map(v=>v.sequence))).sort((a,b)=>a-b);
   let bonus:BonusConfig|null=null;try{const raw=parsed.bonus??null;if(raw&&typeof raw==="object"){const content=String(raw.content??"").trim();const quickActions=Array.isArray(raw.quickActions)?raw.quickActions.map((v:any)=>String(v??"").trim()).filter(Boolean).slice(0,4):[];const date=String(raw.date??"").trim();if(content||quickActions.length||date)bonus={content,quickActions,date};}}catch{}
   return {taskCount,requiredDepositCents:clampMoneyCents(Number(parsed.requiredDepositCents??0)),amountCents:clampMoneyCents(Number(parsed.amountCents??0)),vipLevel,resetCount:Math.max(0,Math.min(100000,Math.trunc(Number(parsed.resetCount??0)))),cycleStartSequence:Math.max(1,Math.trunc(Number(cycleRow?.value||parsed.cycleStartSequence||1))),combinationTaskCount:assignments.length||sequences.length,combinationTaskAmountCents:clampMoneyCents(Number(parsed.combinationTaskAmountCents??0)),combinationTaskSequences:sequences,combinationCommissionRateBps:1500,combinationTaskRound:fallbackRound,combinationTaskAssignments:assignments,bonus};
 }
@@ -277,7 +282,7 @@ app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const userId=res.locals.auth.sub;const config=await getTaskManagementConfig(userId);
   const session=await prisma.taskSession.findFirst({where:{clientId:userId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
   const tasks=session?await prisma.task.findMany({where:{sessionId:session.id},orderBy:{sequence:"asc"}}):[];
-  const [u,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);const bonusHistoryRow=await prisma.setting.findUnique({where:{key:bonusHistoryKey(userId)}});let bonusHistory:any[]=[];try{bonusHistory=bonusHistoryRow?.value?JSON.parse(bonusHistoryRow.value):[];}catch{}const available=Math.max(0,u.balanceCents-(u.frozenCents??0));const nextPending=tasks.find(t=>t.status===TaskStatus.PENDING);const needAmountCents=nextPending&&nextPending.amountCents>available?nextPending.amountCents:0;const vipBenefits=await Promise.all(["VIP1","VIP2","VIP3","VIP4"].map(async vip=>{const rule=await getVipRule(vip);return {vipLevel:vip,taskCount:rule.taskCount,commissionRateBps:rule.commissionRateBps};}));
+  const [u,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);const bonusHistoryRow=await prisma.setting.findUnique({where:{key:bonusHistoryKey(userId)}});let bonusHistory:any[]=[];try{bonusHistory=bonusHistoryRow?.value?JSON.parse(bonusHistoryRow.value):[];}catch{}const available=Math.max(0,u.balanceCents-(u.frozenCents??0));const nextPending=tasks.find(t=>t.status===TaskStatus.PENDING);const needAmountCents=nextPending&&nextPending.taskType==="COMBINATION"&&nextPending.amountCents>available?Math.max(0,nextPending.amountCents-available):0;const vipBenefits=await Promise.all(["VIP1","VIP2","VIP3","VIP4"].map(async vip=>{const rule=await getVipRule(vip);return {vipLevel:vip,taskCount:rule.taskCount,commissionRateBps:rule.commissionRateBps};}));
   res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),taskConfig:{taskCount:session?.generatedTaskCount??config.taskCount,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,combinationTaskRound:config.combinationTaskRound,bonus:config.bonus,bonusHistory,needAmountCents,displayBalanceCents:needAmountCents>0?0:available},vipBenefits,benefitRules:[{days:5,label:"Milestone benefit"},{days:15,label:"Enhanced milestone benefit"},{days:30,label:"Extended milestone benefit"}],transactions:txs,messages});
 }));
 app.get("/api/client/leaderboard",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
@@ -363,7 +368,9 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       const sessionId=await uniqueTaskSessionId();const latestTask=await tx.task.findFirst({where:{clientId},select:{sequence:true},orderBy:{sequence:"desc"}});const sequenceStart=Math.max(config.cycleStartSequence,(latestTask?.sequence??0)+1);
       const assignments=config.combinationTaskAssignments.filter(a=>a.round===round);const taskData:any[]=[];const amounts:number[]=[];
       for(let i=0;i<taskCount;i++){
-        const localSequence=i+1;const assignment=assignments.find(a=>a.sequence===localSequence);const combination=Boolean(assignment)||(!assignment&&config.combinationTaskSequences.includes(localSequence)&&config.combinationTaskRound===round);
+        const localSequence=i+1;const assignment=assignments.find(a=>a.sequence===localSequence);
+        const legacyCombination=Boolean(!assignment&&config.combinationTaskAmountCents>=5000&&config.combinationTaskSequences.includes(localSequence)&&config.combinationTaskRound===round);
+        const combination=Boolean(assignment)||legacyCombination;
         const amount:number=combination?Math.max(5000,Number(assignment?.amountCents||config.combinationTaskAmountCents)):(i===0?Number(randomTaskAmount(available,0)||0):0);
         if(combination&&(!amount||amount<5000))throw Object.assign(new Error("A safe combination task amount could not be generated."),{code:"TASK_AMOUNT_INVALID"});
         if(i===0&&(!amount||amount<5000))throw Object.assign(new Error("A safe task amount could not be generated from the current available balance."),{code:"TASK_AMOUNT_INVALID"});
@@ -394,7 +401,10 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
   const activeSession=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});const first=activeSession?await prisma.task.findFirst({where:{sessionId:activeSession.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}}):null;
   if(!first||first.id!==task.id)return res.status(409).json({error:"Please finish your current task before opening another one."});
   let updated=task;
-  if(!task.revealedAt){
+  if(task.taskType==="COMBINATION"&&task.amountCents>availableBalanceCents+Math.max(0,Number(task.reservedAmountCents||0))){
+    const shortfall=Math.max(0,Number(task.amountCents||0)-availableBalanceCents);
+    return res.status(409).json({success:false,code:"COMBINATION_NEED_AMOUNT",error:"This special combination task needs additional balance before it can be opened.",needAmountCents:shortfall,task:taskPublic(task,true)});
+  }else if(!task.revealedAt){
     const amount=await randomTaskAmount(user.balanceCents,user.frozenCents);
     if(amount===null)return res.status(409).json({error:"Your balance is too low to start this task. Please add funds before continuing."});
     try{
