@@ -100,7 +100,7 @@ const INDIA_CHANNEL_EXCLUSIONS=new RegExp(process.env.TRAILER_INDIA_CHANNEL_EXCL
 function isLikelyTrailer(title:string,description:string,channelTitle=""){
   const titleText=String(title||"").toLowerCase();
   const channelText=String(channelTitle||"").toLowerCase();
-  const negativeTitle=/\\b(reaction|reacts|review|recap|explained|breakdown|fan\\s*(made|trailer|edit)|parody|spoof|edit|shorts?|clip|scene|interview|behind\\s+the\\s+scenes|podcast|news|gameplay|song|lyric|ost)\\b/i.test(titleText);
+  const negativeTitle=/\\b(reaction|reacts|review|recap|explained|breakdown|fan\\s*(made|trailer|edit)|parody|spoof|edit|shorts?|interview|behind\\s+the\\s+scenes|podcast|news|gameplay|song|lyric|ost)\\b/i.test(titleText);
   const negativeChannel=/\\b(reaction|review|recap|explained|breakdown|parody|spoof|shorts?|podcast|news|gameplay|music)\\b/i.test(channelText);
   // Do not require words such as "official trailer", "trailer", or a
   // Hollywood studio name. Valid movie trailers are identified by the
@@ -167,7 +167,7 @@ async function discover(movie:EligibleMovie,cfg:TrendingConfig){
   const key=String(process.env.YOUTUBE_API_KEY||"").trim();
   if(!key)throw providerError("YOUTUBE_AUTH_ERROR","YOUTUBE_API_KEY is not configured on the backend.");
   if(!isEligibleHollywoodMovie(movie)||!moviePosterIsUsable(movie))throw providerError("NO_ELIGIBLE_HOLLYWOOD_MOVIE","The selected movie is not eligible for MOJO.");
-  const queries=[movie.title+" official trailer",movie.title+" trailer",movie.title+" movie clip",movie.title+" official clip"];
+  const queries=[movie.title+" official trailer",movie.title+" official teaser",movie.title+" official featurette",movie.title+" official clip",movie.title+" movie scene",movie.title+" trailer",movie.title+" movie clip"];
   const searchResults:any[]=[];let ids:string[]=[];let lastQuery="";
   for(const query of queries.slice(0,cfg.discoveryMaxAttempts)){
     const url=new URL("https://youtube.googleapis.com/youtube/v3/search");
