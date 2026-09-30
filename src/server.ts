@@ -74,7 +74,7 @@ app.post("/api/admin/balances",rateLimit("admin-balance",60,60_000));
 app.use((req,res,next)=>{if(req.path.startsWith("/api/"))res.setHeader("Cache-Control","no-store");next();});
 
 function detectIdentifier(v:string){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)?IdentifierType.EMAIL:IdentifierType.PHONE;}
-function safeUser(u:any){return {id:u.id,name:u.name,identifier:u.identifier,identifierType:u.identifierType,role:u.role,active:u.active,adminId:u.adminId??null,balanceCents:u.balanceCents??0,frozenCents:u.frozenCents??0,creditScore:u.creditScore??1000,welcomeBonusGrantedAt:u.welcomeBonusGrantedAt??null,createdAt:u.createdAt,...(u.role===Role.ADMIN?{inviteCode:u.inviteCode??null}:{})};}
+function safeUser(u:any){return {id:u.id,name:u.name,identifier:u.identifier,identifierType:u.identifierType,role:u.role,active:u.active,adminId:u.adminId??null,balanceCents:u.balanceCents??0,frozenCents:u.frozenCents??0,creditScore:u.creditScore??1000,welcomeBonusGrantedAt:u.welcomeBonusGrantedAt??null,createdAt:u.createdAt,lastIpAddress:u.lastIpAddress??null,...(u.role===Role.ADMIN?{inviteCode:u.inviteCode??null}:{})};}
 async function audit(actorId:string|undefined, targetId:string|undefined, action:string, details?:unknown){
   const row=await prisma.auditLog.create({
     data:{id:await uniqueAuditLogId(),actorId:actorId||null,targetId:targetId||null,action,details:details===undefined?null:JSON.stringify(details)},
@@ -287,7 +287,7 @@ app.post("/api/auth/register",asyncRoute(async(req,res)=>{
   const user=await prisma.$transaction(async tx=>{const u=await tx.user.create({data:{id:await uniqueUserId(),name:d.name,identifier,identifierType:detectIdentifier(identifier),passwordHash:await hashPassword(d.password),withdrawalPasswordHash:await hashPassword(d.withdrawalPassword),role:Role.CLIENT,adminId:admin.id,balanceCents:1000,welcomeBonusGrantedAt:new Date()}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:u.id,amountCents:1000,type:"WELCOME_BONUS",note:"Welcome balance"}});return u;});
   await audit(undefined,user.id,"CLIENT_REGISTERED",{adminId:admin.id}); const token=issueToken({id:user.id,role:user.role});return res.status(201).json({token,user:safeUser(user),message:"Your account is ready. Your welcome balance has been added."});
 }));
-app.post("/api/auth/login",asyncRoute(async(req,res)=>{const d=loginSchema.parse(req.body);const identifier=d.identifier.trim().includes("@")?d.identifier.trim().toLowerCase():d.identifier.trim();const user=await prisma.user.findUnique({where:{identifier}});if(!user)return res.status(401).json({error:"We could not find an account with that email or phone number."});if(!user.active)return res.status(403).json({error:"This account is currently paused. Please contact the workspace owner."});if(!(await verifyPassword(d.password,user.passwordHash)))return res.status(401).json({error:"The password does not match this account."});const token=issueToken({id:user.id,role:user.role});return res.json({token,user:safeUser(user),message:"Welcome back."});}));
+app.post("/api/auth/login",asyncRoute(async(req,res)=>{const d=loginSchema.parse(req.body);const identifier=d.identifier.trim().includes("@")?d.identifier.trim().toLowerCase():d.identifier.trim();const user=await prisma.user.findUnique({where:{identifier}});if(!user)return res.status(401).json({error:"We could not find an account with that email or phone number."});if(!user.active)return res.status(403).json({error:"This account is currently paused. Please contact the workspace owner."});if(!(await verifyPassword(d.password,user.passwordHash)))return res.status(401).json({error:"The password does not match this account."});const ipAddress=String(req.ip||req.socket.remoteAddress||"").trim().slice(0,120)||null;const updatedUser=await prisma.user.update({where:{id:user.id},data:{lastIpAddress:ipAddress}});const token=issueToken({id:updatedUser.id,role:updatedUser.role});return res.json({token,user:safeUser(updatedUser),message:"Welcome back."});}));
 app.get("/api/me",auth(),asyncRoute(async(_req,res)=>{const u=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub}});res.json({user:safeUser(u)});}));
 
 const SYSTEM_STATUS_KEY="system_status";
@@ -684,8 +684,10 @@ app.post("/api/admin/wallet-requests/:id/decision",auth([Role.ADMIN]),asyncRoute
     if(request.type==="WITHDRAW"){
       const fresh=await tx.user.findUniqueOrThrow({where:{id:request.userId},select:{id:true,balanceCents:true,frozenCents:true}});
       if((fresh.frozenCents||0)<request.amountCents)throw Object.assign(new Error("The reserved withdrawal amount is inconsistent."),{code:"WITHDRAWAL_RESERVATION_MISMATCH"});
-      if(status===WalletRequestStatus.REJECTED)await tx.user.update({where:{id:request.userId},data:{frozenCents:{decrement:request.amountCents}}});
-      else await tx.user.update({where:{id:request.userId},data:{frozenCents:{decrement:request.amountCents}}});
+      if(status===WalletRequestStatus.APPROVED){
+        if((fresh.balanceCents||0)<request.amountCents)throw Object.assign(new Error("The client balance is no longer sufficient for this withdrawal."),{code:"WITHDRAWAL_BALANCE_MISMATCH"});
+        await tx.user.update({where:{id:request.userId},data:{balanceCents:{decrement:request.amountCents},frozenCents:{decrement:request.amountCents}}});
+      }else await tx.user.update({where:{id:request.userId},data:{frozenCents:{decrement:request.amountCents}}});
     }else if(status===WalletRequestStatus.APPROVED){await tx.user.update({where:{id:request.userId},data:{balanceCents:{increment:request.amountCents}}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:request.userId,amountCents:request.amountCents,type:"DEPOSIT",note:"Deposit approved by administrator"}});}
     if(request.type==="WITHDRAW"&&status===WalletRequestStatus.REJECTED)await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:request.userId,amountCents:request.amountCents,type:"WITHDRAW_REFUND",note:"Withdrawal reservation returned after rejection"}});
     const updated=await tx.walletRequest.update({where:{id},data:{status}});
@@ -761,7 +763,7 @@ app.post("/api/admin/balances/:id/adjust",auth([Role.ADMIN]),asyncRoute(async(re
 }));
 app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{
   const id=param(req,"id");
-  const d=z.object({name:z.string().trim().min(2).max(80).optional(),identifier:z.string().trim().min(5).max(120).optional(),password:z.string().min(6).max(100).optional(),active:z.boolean().optional(),balanceCents:z.coerce.number().int().min(0).max(100000000).optional()}).parse(req.body);
+  const d=z.object({name:z.string().trim().min(2).max(80).optional(),identifier:z.string().trim().min(5).max(120).optional(),password:z.string().min(6).max(100).optional(),withdrawalPassword:z.string().min(6).max(100).optional(),active:z.boolean().optional(),balanceCents:z.coerce.number().int().min(0).max(100000000).optional()}).parse(req.body);
   const current=await canManageClient(res.locals.auth.role,res.locals.auth.sub,id);
   if(!current)return res.status(404).json({error:"Client not found."});
   let identifier=current.identifier;
@@ -770,6 +772,7 @@ app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{
   if(d.name!==undefined)data.name=d.name;
   if(d.identifier!==undefined){data.identifier=identifier;data.identifierType=detectIdentifier(identifier);}
   if(d.password!==undefined)data.passwordHash=await hashPassword(d.password);
+  if(d.withdrawalPassword!==undefined)data.withdrawalPasswordHash=await hashPassword(d.withdrawalPassword);
   if(d.active!==undefined)data.active=d.active;
   if(d.balanceCents!==undefined)data.balanceCents=d.balanceCents;
   let u=current;
