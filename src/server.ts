@@ -607,12 +607,13 @@ app.get("/api/client/wallet-requests",auth([Role.CLIENT]),asyncRoute(async(_req,
 }));
 app.post("/api/client/wallet-requests",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const clientId=res.locals.auth.sub;
-  const d=z.object({type:z.enum(["DEPOSIT","WITHDRAW"]),amountCents:z.coerce.number().int().positive().max(100000000),idempotencyKey:z.string().trim().min(8).max(120).optional()}).parse(req.body||{});
+  const d=z.object({type:z.enum(["DEPOSIT","WITHDRAW"]),amountCents:z.coerce.number().int().positive().max(100000000),withdrawalPassword:z.string().min(6).max(100).optional(),idempotencyKey:z.string().trim().min(8).max(120).optional()}).parse(req.body||{});
   const idem=String(req.header("Idempotency-Key")||d.idempotencyKey||"").trim()||null;
   if(idem){const prior=await prisma.walletRequest.findUnique({where:{idempotencyKey:idem},include:{user:true}});if(prior&&prior.userId===clientId)return res.json({success:true,request:walletRequestPublic(prior),idempotent:true});}
   const request=await prisma.$transaction(async tx=>{
-    const user=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{id:true,balanceCents:true,frozenCents:true,creditScore:true,adminId:true}});
+    const user=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{id:true,balanceCents:true,frozenCents:true,creditScore:true,adminId:true,withdrawalPasswordHash:true}});
     if(d.type==="WITHDRAW"){
+      if(!user.withdrawalPasswordHash||!d.withdrawalPassword||!(await verifyPassword(d.withdrawalPassword,user.withdrawalPasswordHash)))throw Object.assign(new Error("The withdrawal password is not correct."),{code:"INVALID_WITHDRAWAL_PASSWORD"});
       const available=Math.max(0,user.balanceCents-(user.frozenCents||0));
       if(available<d.amountCents)throw Object.assign(new Error("Your available balance is not enough for this withdrawal."),{code:"INSUFFICIENT_AVAILABLE_BALANCE"});
       if(!user.adminId)throw Object.assign(new Error("Your account is not currently connected to an active administrator."),{code:"NO_ADMIN"});
