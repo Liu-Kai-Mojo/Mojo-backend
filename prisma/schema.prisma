@@ -152,6 +152,10 @@ model TaskSession {
   totalExpectedCommissionCents Int  @default(0)
   completedTaskCount       Int      @default(0)
   resetNumber              Int      @default(0)
+  round                    Int      @default(1)
+  dayKey                   String   @default("")
+  reservedAmountCents      Int      @default(0)
+  settledAmountCents       Int      @default(0)
   taskCountOverride        Int?
   amountOverrideCents      Int?
   combinationTaskCount     Int      @default(0)
@@ -178,6 +182,9 @@ model Task {
   commissionCents Int
   status         TaskStatus @default(PENDING)
   isLucky        Boolean    @default(false)
+  ticketCount    Int        @default(1)
+  reservedAmountCents Int    @default(0)
+  settledAt      DateTime?
   revealedAt     DateTime?
   completedAt    DateTime?
   videoProvider  String?
