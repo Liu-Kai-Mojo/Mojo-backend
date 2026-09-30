@@ -78,8 +78,8 @@ const LEGACY_TASK_SETTLEMENT_CUTOFF=new Date("2026-10-01T00:00:00.000Z");
 
 async function reconcileLegacyTaskSettlementBalance(clientId:string){
   return prisma.$transaction(async tx=>{
-    await tx.$executeRaw\`SELECT pg_advisory_xact_lock(hashtext(\${clientId}))\`;
-    const markerKey=\`task_balance_reconciled_v2_\${clientId}\`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
+    const markerKey=`task_balance_reconciled_v2_${clientId}`;
     const marker=await tx.setting.findUnique({where:{key:markerKey}});
     const current=await tx.user.findUniqueOrThrow({where:{id:clientId}});
     if(marker)return current;
