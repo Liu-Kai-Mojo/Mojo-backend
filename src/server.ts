@@ -197,7 +197,8 @@ async function upsertDefaultVipRules(){
 }
 function taskPublic(t:any,includeValues=false){
   const completed=String(t.status||"")===TaskStatus.COMPLETED;
-  const hasAssignedVideo=Boolean(t.videoId);
+  const blockedCombination=!completed&&String(t.taskType||"")=="COMBINATION"&&Math.max(0,Number(t.reservedAmountCents||0))<=0;
+  const hasAssignedVideo=Boolean(t.videoId)&&!blockedCombination;
   const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title||"").trim());
   const moviePosterUrl=String(t.moviePosterUrl||t.videoThumbnailUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
