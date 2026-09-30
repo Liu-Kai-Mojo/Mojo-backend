@@ -377,7 +377,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
           if(!amount)throw Object.assign(new Error("Your available balance is not enough for this task. Please add funds before continuing."),{code:"LOW_BALANCE"});
           const rateBps=vipRowRateBps(pending.commissionRateBps,active.vipLevel);const commission=Math.max(1,Math.round(amount*rateBps/10000));
           await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:amount}}});
-          const reserved=await tx.task.update({where:{id:pending.id},data:{amountCents:amount,commissionCents:commission,commissionRateBps:rateBps,ticketCount:calculateTicketCount(amount),reservedAmountCents:amount,revealedAt:pending.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
+          const reserved=await tx.task.update({where:{id:pending.id},data:{amountCents:amount,commissionCents:commission,commissionRateBps:rateBps,ticketCount:nextUniqueTicketCount(amount,usedTicketCounts),reservedAmountCents:amount,revealedAt:pending.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
           await tx.taskSession.update({where:{id:active.id},data:{reservedAmountCents:{increment:amount},totalTaskAmountCents:{increment:amount},totalExpectedCommissionCents:{increment:commission}}});
           return {session:active,task:reserved,resumed:true};
         }
