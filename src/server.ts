@@ -8,7 +8,7 @@ import { z } from "zod";
 import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
-import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
+import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueWalletRequestId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
 import { getTrendingVideoForClient, getTrendingVideosForClient, getAlternativeVideoForTask, getCurrentTrailerCandidates, trendingConfig, normalizeMovieTitle } from "./trending.js";
 
 const app=express();
@@ -473,6 +473,37 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
   });
   res.json({user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task completed and your balance has been updated."});
 }));
+app.get("/api/client/events",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const clientId=res.locals.auth.sub;
+  res.status(200).setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-cache, no-transform");res.setHeader("Connection","keep-alive");res.flushHeaders?.();
+  addRealtimeClient(clientId,res);res.write(`event: ready\\ndata: ${JSON.stringify({ok:true,subject:clientId})}\\n\\n`);
+}));
+app.get("/api/client/wallet-requests",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const rows=await prisma.walletRequest.findMany({where:{userId:res.locals.auth.sub},orderBy:{createdAt:"desc"},take:50});
+  res.json({requests:rows.map(walletRequestPublic)});
+}));
+app.post("/api/client/wallet-requests",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const clientId=res.locals.auth.sub;
+  const d=z.object({type:z.enum(["DEPOSIT","WITHDRAW"]),amountCents:z.coerce.number().int().positive().max(100000000),idempotencyKey:z.string().trim().min(8).max(120).optional()}).parse(req.body||{});
+  const idem=String(req.header("Idempotency-Key")||d.idempotencyKey||"").trim()||null;
+  if(idem){const prior=await prisma.walletRequest.findUnique({where:{idempotencyKey:idem},include:{user:true}});if(prior&&prior.userId===clientId)return res.json({success:true,request:walletRequestPublic(prior),idempotent:true});}
+  const request=await prisma.$transaction(async tx=>{
+    const user=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{id:true,balanceCents:true,frozenCents:true,creditScore:true,adminId:true}});
+    if(d.type==="WITHDRAW"){
+      const available=Math.max(0,user.balanceCents-(user.frozenCents||0));
+      if(available<d.amountCents)throw Object.assign(new Error("Your available balance is not enough for this withdrawal."),{code:"INSUFFICIENT_AVAILABLE_BALANCE"});
+      if(!user.adminId)throw Object.assign(new Error("Your account is not currently connected to an active administrator."),{code:"NO_ADMIN"});
+      await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:d.amountCents}}});
+      await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:clientId,amountCents:-d.amountCents,type:"WITHDRAW",note:"Withdrawal reserved pending administrator decision"}});
+    }
+    return tx.walletRequest.create({data:{id:await uniqueWalletRequestId(),userId:clientId,type:d.type,amountCents:d.amountCents,idempotencyKey:idem}});
+  },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
+  const client=await prisma.user.findUniqueOrThrow({where:{id:clientId}});
+  if(client.adminId)publishRealtime(client.adminId,"wallet_request_created",{request:walletRequestPublic({...request,user:client}),type:d.type,user:safeUser(client)});
+  publishRealtime(clientId,"wallet_request_created",{request:walletRequestPublic({...request,user:client}),user:safeUser(client)});
+  await audit(clientId,clientId,"WALLET_REQUEST_CREATED",{type:d.type,amountCents:d.amountCents,requestId:request.id});
+  res.status(201).json({success:true,request:walletRequestPublic({...request,user:client}),user:safeUser(client)});
+}));
 app.get("/api/client/messages",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const messages=await prisma.message.findMany({where:{OR:[{senderId:res.locals.auth.sub},{recipientId:res.locals.auth.sub}]},orderBy:{createdAt:"asc"}});res.json({messages});}));
 app.post("/api/client/messages",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{const d=messageSchema.parse(req.body);const sender=await prisma.user.findUniqueOrThrow({where:{id:res.locals.auth.sub},select:{adminId:true}});const recipient=d.recipientId?await prisma.user.findFirst({where:{id:d.recipientId,role:{in:[Role.ADMIN,Role.OWNER]},active:true}}):sender.adminId?await prisma.user.findFirst({where:{id:sender.adminId,role:Role.ADMIN,active:true}}):null;if(!recipient)return res.status(400).json({error:"Your account is not currently connected to an active administrator."});const msg=await prisma.message.create({data:{id:await uniqueMessageId(),senderId:res.locals.auth.sub,recipientId:recipient.id,subject:d.subject,body:d.body}});res.status(201).json({message:msg});}));
 app.get("/api/client/account",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
@@ -505,6 +536,40 @@ app.patch("/api/client/account/wallet",auth([Role.CLIENT]),asyncRoute(async(req,
 }));
 
 const staff=[Role.OWNER,Role.ADMIN];
+app.get("/api/admin/events",auth([Role.ADMIN]),asyncRoute(async(_req,res)=>{
+  const adminId=res.locals.auth.sub;
+  res.status(200).setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-cache, no-transform");res.setHeader("Connection","keep-alive");res.flushHeaders?.();
+  addRealtimeClient(adminId,res);res.write(`event: ready\\ndata: ${JSON.stringify({ok:true,subject:adminId})}\\n\\n`);
+}));
+app.get("/api/admin/wallet-requests",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
+  const uid=String(req.query.uid||"").trim();
+  const rows=await prisma.walletRequest.findMany({where:{status:WalletRequestStatus.PENDING,type:{in:["DEPOSIT","WITHDRAW"]},user:{role:Role.CLIENT,adminId:res.locals.auth.sub,...(uid?{id:uid}:{})}},include:{user:true},orderBy:{createdAt:"asc"}});
+  res.json({requests:rows.map(walletRequestPublic)});
+}));
+app.post("/api/admin/wallet-requests/:id/decision",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
+  const id=param(req,"id");
+  const d=z.object({decision:z.enum(["APPROVE","REJECT"])}).parse(req.body||{});
+  const result=await prisma.$transaction(async tx=>{
+    const request=await tx.walletRequest.findUnique({where:{id},include:{user:true}});
+    if(!request||request.user.role!==Role.CLIENT||request.user.adminId!==res.locals.auth.sub)throw Object.assign(new Error("Wallet request not found in your workspace."),{code:"NOT_FOUND"});
+    if(request.status!==WalletRequestStatus.PENDING)throw Object.assign(new Error("This wallet request has already been decided."),{code:"REQUEST_ALREADY_DECIDED"});
+    const status=d.decision==="APPROVE"?WalletRequestStatus.APPROVED:WalletRequestStatus.REJECTED;
+    if(request.type==="WITHDRAW"){
+      const fresh=await tx.user.findUniqueOrThrow({where:{id:request.userId},select:{id:true,balanceCents:true,frozenCents:true}});
+      if((fresh.frozenCents||0)<request.amountCents)throw Object.assign(new Error("The reserved withdrawal amount is inconsistent."),{code:"WITHDRAWAL_RESERVATION_MISMATCH"});
+      if(status===WalletRequestStatus.REJECTED)await tx.user.update({where:{id:request.userId},data:{frozenCents:{decrement:request.amountCents}}});
+      else await tx.user.update({where:{id:request.userId},data:{frozenCents:{decrement:request.amountCents}}});
+    }else if(status===WalletRequestStatus.APPROVED){await tx.user.update({where:{id:request.userId},data:{balanceCents:{increment:request.amountCents}}});await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:request.userId,amountCents:request.amountCents,type:"DEPOSIT",note:"Deposit approved by administrator"}});}
+    if(request.type==="WITHDRAW"&&status===WalletRequestStatus.REJECTED)await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:request.userId,amountCents:request.amountCents,type:"WITHDRAW_REFUND",note:"Withdrawal reservation returned after rejection"}});
+    const updated=await tx.walletRequest.update({where:{id},data:{status}});
+    return {request:updated,user:await tx.user.findUniqueOrThrow({where:{id:request.userId}})};
+  },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
+  const publicRequest=walletRequestPublic({...result.request,user:result.user});
+  publishRealtime(res.locals.auth.sub,"wallet_request_decided",{request:publicRequest,user:safeUser(result.user)});
+  publishRealtime(result.user.id,"wallet_request_decided",{request:publicRequest,user:safeUser(result.user)});
+  await audit(res.locals.auth.sub,result.user.id,d.decision==="APPROVE"?"WALLET_REQUEST_APPROVED":"WALLET_REQUEST_REJECTED",{requestId:id,type:result.request.type,amountCents:result.request.amountCents});
+  res.json({success:true,request:publicRequest,user:safeUser(result.user),message:d.decision==="APPROVE"?"Request approved.":"Request rejected."});
+}));
 app.get("/api/admin/task-price-config",auth(staff),asyncRoute(async(_req,res)=>{const c=await taskPriceConfig();res.json({config:{minPercent:c.minPercent,maxPercent:c.maxPercent,minAbsoluteCents:c.minAbsoluteCents,maxAbsoluteCents:c.maxAbsoluteCents,minRemainingBalanceCents:c.minRemainingBalanceCents}});}));
 app.patch("/api/admin/task-price-config",auth(staff),asyncRoute(async(req,res)=>{const d=z.object({minPercent:z.coerce.number().min(0).max(100),maxPercent:z.coerce.number().min(0).max(100),minAbsoluteCents:z.coerce.number().int().min(1).max(100000000),maxAbsoluteCents:z.coerce.number().int().min(1).max(100000000),minRemainingBalanceCents:z.coerce.number().int().min(0).max(100000000)}).parse(req.body||{});if(d.maxPercent<d.minPercent||d.maxAbsoluteCents<d.minAbsoluteCents)return res.status(400).json({error:"Maximum price settings must be greater than or equal to minimum price settings."});const map:{field:keyof typeof d;key:string}[]=[{field:"minPercent",key:"task_price_min_percent"},{field:"maxPercent",key:"task_price_max_percent"},{field:"minAbsoluteCents",key:"task_price_min_absolute_cents"},{field:"maxAbsoluteCents",key:"task_price_max_absolute_cents"},{field:"minRemainingBalanceCents",key:"task_price_min_remaining_balance_cents"}];for(const item of map)await prisma.setting.upsert({where:{key:item.key},create:{id:await uniqueSettingId(),key:item.key,value:String(d[item.field])},update:{value:String(d[item.field])}});await audit(res.locals.auth.sub,undefined,"TASK_PRICE_CONFIG_UPDATED",{fields:Object.keys(d)});res.json({config:await taskPriceConfig(),message:"Task price settings saved."});}));
 app.get("/api/admin/trending-config",auth(staff),asyncRoute(async(_req,res)=>{res.json({config:await trendingConfig()});}));
