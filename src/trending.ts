@@ -390,6 +390,21 @@ const VERIFIED_HOLLYWOOD_VIDEOS=[
   {id:"62023",videoId:"V75dMMIW2B4",title:"The Lord of the Rings: The Fellowship of the Ring | Official Trailer",channelTitle:"New Line Cinema",publishedAt:"2001-06-01T00:00:00.000Z",thumbnailUrl:"https://i.ytimg.com/vi/V75dMMIW2B4/hqdefault.jpg",durationSeconds:155,movieId:"61026",movieTitle:"The Lord of the Rings: The Fellowship of the Ring",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/The_Lord_of_the_Rings_The_Fellowship_of_the_Ring_(2001).jpg?width=600",movieReleaseDate:"2001-12-19T00:00:00.000Z",movieYear:2001,movieGenre:"Fantasy, Adventure, Drama",movieOriginalLanguage:"en",movieCountries:"United States",movieProductionCompanies:"New Line Cinema;WingNut Films",movieDistributor:"New Line Cinema",score:79},
   {id:"62024",videoId:"a8Gx8wiNbs8",title:"Doctor Strange in the Multiverse of Madness | Official Trailer",channelTitle:"Marvel Studios",publishedAt:"2022-02-14T00:00:00.000Z",thumbnailUrl:"https://i.ytimg.com/vi/a8Gx8wiNbs8/hqdefault.jpg",durationSeconds:145,movieId:"61027",movieTitle:"Doctor Strange in the Multiverse of Madness",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Doctor_Strange_in_the_Multiverse_of_Madness_poster.jpg?width=600",movieReleaseDate:"2022-05-06T00:00:00.000Z",movieYear:2022,movieGenre:"Action, Adventure, Fantasy",movieOriginalLanguage:"en",movieCountries:"United States",movieProductionCompanies:"Marvel Studios;Walt Disney Pictures",movieDistributor:"Walt Disney Studios Motion Pictures",score:78}
 ] as const;
+function verifiedStaticPool():TrendingVideo[]{
+  return VERIFIED_HOLLYWOOD_VIDEOS.map(v=>({
+    provider:"youtube" as const,
+    videoId:v.videoId,title:v.title,description:"Verified Hollywood movie trailer or official movie clip.",
+    channelId:"",channelTitle:v.channelTitle,thumbnailUrl:v.thumbnailUrl,durationSeconds:v.durationSeconds,
+    publishedAt:v.publishedAt,categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",
+    score:v.score,movieId:v.movieId,movieTitle:v.movieTitle,moviePosterUrl:v.moviePosterUrl,
+    movieReleaseDate:v.movieReleaseDate,movieYear:v.movieYear,movieGenre:v.movieGenre,
+    movieOriginalLanguage:v.movieOriginalLanguage,movieCountries:v.movieCountries,
+    movieProductionCompanies:v.movieProductionCompanies,movieDistributor:v.movieDistributor
+  }));
+}
+function shuffleTrending(pool:TrendingVideo[]){
+  return [...pool].sort(()=>Math.random()-0.5);
+}
 async function ensureVerifiedHollywoodCache(){
   for(const videoId of INVALID_KNOWN_VIDEO_IDS){await prisma.trailerCache.updateMany({where:{videoId},data:{embeddable:false,lastValidatedAt:new Date(0)}}).catch(()=>{});}
   for(const v of VERIFIED_HOLLYWOOD_VIDEOS){
@@ -431,13 +446,26 @@ export async function getTrendingVideosForClient(clientId:string,count:number){
   const cfg=await config();
   if(cfg.enabled){
     await ensureVerifiedHollywoodCache();
-    const pool=await loadCache(cfg);if(pool.length)return selectMany(clientId,pool,count,cfg);
-    const stale=await loadCache(cfg,true);if(stale.length)return selectMany(clientId,stale,count,cfg);
-    try{const discovered=await discoverAndCache(cfg);if(discovered.length)return selectMany(clientId,discovered,count,cfg);}
-    catch(error){const fallback=await loadCache(cfg,true);if(fallback.length)return selectMany(clientId,fallback,count,cfg);}
+    const staticPool=verifiedStaticPool();
+    const pool=await loadCache(cfg);
+    // Keep the curated Hollywood pool authoritative even when some poster
+    // hosts temporarily fail validation. This prevents the Client from
+    // collapsing to only the few rows that happen to validate at that moment.
+    if(pool.length>=count)return selectMany(clientId,pool,count,cfg);
+    const merged=[...pool,...staticPool.filter(v=>!pool.some(p=>p.videoId===v.videoId))];
+    if(merged.length>=count)return selectMany(clientId,merged,count,cfg);
+    const stale=await loadCache(cfg,true);
+    const staleMerged=[...stale,...staticPool.filter(v=>!stale.some(p=>p.videoId===v.videoId))];
+    if(staleMerged.length>=count)return selectMany(clientId,staleMerged,count,cfg);
+    try{
+      const discovered=await discoverAndCache(cfg);
+      if(discovered.length)return selectMany(clientId,[...discovered,...staticPool.filter(v=>!discovered.some(p=>p.videoId===v.videoId))],count,cfg);
+    }catch(error){
+      const fallback=await loadCache(cfg,true);
+      if(fallback.length)return selectMany(clientId,[...fallback,...staticPool.filter(v=>!fallback.some(p=>p.videoId===v.videoId))],count,cfg);
+    }
+    return selectMany(clientId,staticPool,count,cfg);
   }
-  // Provider-independent fallback: open-licensed cinematic material can be
-  // replayed indefinitely without YouTube search quota or discovery cooldowns.
   return openLicensedFallback(clientId,count);
 }
 export async function getTrendingVideoForClient(clientId:string){return (await getTrendingVideosForClient(clientId,1))[0];}
@@ -455,7 +483,11 @@ export async function getAlternativeVideoForTask(clientId:string,movieTitle:stri
 }
 export async function getCurrentTrailerCandidates(){
   const cfg=await config();if(!cfg.enabled)return [];
-  return loadCache(cfg,true);
+  await ensureVerifiedHollywoodCache();
+  const cached=await loadCache(cfg,true);
+  const staticPool=verifiedStaticPool();
+  const merged=[...cached,...staticPool.filter(v=>!cached.some(c=>c.videoId===v.videoId))];
+  return shuffleTrending(merged).slice(0,20);
 }
 export async function runYouTubeDiagnostic(){return {skipped:true,reason:"manual-only diagnostic; production startup does not call search.list"};}
 export async function warmTrendingVideoCache(){
