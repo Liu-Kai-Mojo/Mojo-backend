@@ -176,6 +176,7 @@ function randomTaskAmount(balanceCents:number,frozenCents=0){
   return secureRandomCents(Math.max(5000,Math.floor(availableBalance*0.90)),availableBalance);
 }
 function calculateTicketCount(taskAmountCents:number){return Math.max(1,Math.min(200,Math.ceil(Math.max(0,taskAmountCents)/5000)));}
+function vipRowRateBps(current:number,vipLevel:string){const n=Math.trunc(Number(current||0));return n>0?n:defaultVipRule(vipLevel).commissionRateBps;}
 async function upsertDefaultTaskPriceSettings(){
   const defaults:{key:string;value:string}[]=[
     {key:"task_price_min_percent",value:"90"},
