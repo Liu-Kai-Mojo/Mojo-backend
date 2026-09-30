@@ -468,7 +468,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
         }
         rateBps=1500;
       }else{
-        const generated=randomTaskAmount(user.balanceCents,user.frozenCents);
+        const standardBalanceCap=Math.min(available,Math.max(0,Number(active.balanceSnapshotCents||available)));\n        const generated=randomTaskAmount(standardBalanceCap,0);
         if(generated===null)throw Object.assign(new Error("Your balance is too low to start this task. Please add funds before continuing."),{code:"LOW_BALANCE"});
         amount=generated;
       }
