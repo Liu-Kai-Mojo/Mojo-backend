@@ -29,6 +29,12 @@ enum TaskStatus {
   COMPLETED
 }
 
+enum WalletRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model User {
   id                    String              @id @db.VarChar(5)
   name                  String
@@ -58,6 +64,7 @@ model User {
   tasks                 Task[]              @relation("ClientTasks")
   taskAssignments       Task[]              @relation("TaskAssignedBy")
   taskSessions          TaskSession[]
+  walletRequests        WalletRequest[]
 
   @@index([adminId])
 }
@@ -261,4 +268,20 @@ model TrailerCache {
   @@index([embeddable, privacyStatus, publishedAt])
   @@index([score])
   @@index([movieId, movieHollywoodEligible])
+}
+
+model WalletRequest {
+  id             String             @id @db.VarChar(5)
+  userId         String             @db.VarChar(5)
+  type           String             @db.VarChar(16)
+  amountCents    Int
+  status         WalletRequestStatus @default(PENDING)
+  idempotencyKey String?            @unique
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@index([type, status, createdAt])
 }
