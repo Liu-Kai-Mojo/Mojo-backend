@@ -364,7 +364,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       const assignments=config.combinationTaskAssignments.filter(a=>a.round===round);const taskData:any[]=[];const amounts:number[]=[];
       for(let i=0;i<taskCount;i++){
         const localSequence=i+1;const assignment=assignments.find(a=>a.sequence===localSequence);const combination=Boolean(assignment)||(!assignment&&config.combinationTaskSequences.includes(localSequence)&&config.combinationTaskRound===round);
-        const amount=combination?Math.max(5000,assignment?.amountCents||config.combinationTaskAmountCents):(i===0?randomTaskAmount(available,0):0);
+        const amount:number=combination?Math.max(5000,Number(assignment?.amountCents||config.combinationTaskAmountCents)):(i===0?Number(randomTaskAmount(available,0)||0):0);
         if(combination&&(!amount||amount<5000))throw Object.assign(new Error("A safe combination task amount could not be generated."),{code:"TASK_AMOUNT_INVALID"});
         if(i===0&&(!amount||amount<5000))throw Object.assign(new Error("A safe task amount could not be generated from the current available balance."),{code:"TASK_AMOUNT_INVALID"});
         if(!combination&&amount>available)throw Object.assign(new Error("Your available balance is not enough to start this task."),{code:"LOW_BALANCE"});
