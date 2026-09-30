@@ -167,6 +167,7 @@ model TaskSession {
   tasks Task[]
   @@index([clientId, createdAt])
   @@index([clientId, status])
+  @@index([clientId, dayKey, round])
 }
 
 model Task {
