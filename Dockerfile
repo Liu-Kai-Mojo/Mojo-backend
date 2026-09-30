@@ -17,4 +17,4 @@ ENV NODE_ENV=production
 
 EXPOSE 8787
 
-CMD ["node", "dist/src/server.js"]
+CMD ["node", "dist/src/migrationDiagnostics.js"]
