@@ -11,6 +11,3 @@ ALTER TABLE "Task"
 
 CREATE INDEX IF NOT EXISTS "TaskSession_clientId_dayKey_round_idx"
   ON "TaskSession"("clientId","dayKey","round");
-
-CREATE INDEX "Task_clientId_status_sequence_idx"
-  ON "Task"("clientId","status","sequence");
