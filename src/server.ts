@@ -170,7 +170,7 @@ function secureRandomCents(min:number,max:number){
   if(max<=min)return min;
   return min+randomInt(max-min+1);
 }
-async function randomTaskAmount(balanceCents:number,frozenCents=0){
+function randomTaskAmount(balanceCents:number,frozenCents=0){
   const availableBalance=Math.max(0,Math.floor(balanceCents)-Math.max(0,Math.floor(frozenCents)));
   if(availableBalance<5000)return null;
   return secureRandomCents(Math.max(5000,Math.floor(availableBalance*0.90)),availableBalance);
@@ -321,7 +321,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
   if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
   const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
   try{
-    const result=await prisma.$transaction(async tx=>{
+    const result:any=await prisma.$transaction(async tx=>{
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
       const user=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{id:true,balanceCents:true,frozenCents:true,active:true}});
       const available=Math.max(0,user.balanceCents-(user.frozenCents??0));
@@ -364,8 +364,8 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       const session=await tx.taskSession.create({data:{id:sessionId,clientId,vipLevel:config.vipLevel,balanceSnapshotCents:user.balanceCents,generatedTaskCount:taskCount,totalTaskAmountCents:totalAmount,totalExpectedCommissionCents:totalCommission,resetNumber:config.resetCount,round,dayKey,reservedAmountCents:reserveFirst?firstData.amountCents:0,taskCountOverride:taskCount,amountOverrideCents:null,combinationTaskCount:taskData.filter(t=>t.taskType==="COMBINATION").length,combinationTaskAmountCents:config.combinationTaskAmountCents,combinationCommissionRateBps:1500}});
       const taskRows:any[]=[];for(const data of taskData)taskRows.push(await tx.task.create({data}));return {session,tasks:taskRows};
     },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
-    let first=result.tasks[0];if(first.reservedAmountCents>0&&!first.revealedAt)first=await prisma.task.update({where:{id:first.id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
-    return res.status(201).json({success:true,session:{id:result.session.id,vipLevel:result.session.vipLevel,balanceSnapshotCents:result.session.balanceSnapshotCents,generatedTaskCount:result.session.generatedTaskCount,resetNumber:result.session.resetNumber,round:result.session.round,dayKey:result.session.dayKey,totalTaskAmountCents:result.session.totalTaskAmountCents,totalExpectedCommissionCents:result.session.totalExpectedCommissionCents,reservedAmountCents:result.session.reservedAmountCents},tasks:result.tasks.map(t=>taskPublic(t,false)),task:taskPublic(first,true),taskConfig:{taskCount:result.session.generatedTaskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,round:result.session.round,combinationTaskAssignments:config.combinationTaskAssignments}});
+    const resultTasks:any[]=Array.isArray(result.tasks)?result.tasks:[result.task];let first=resultTasks[0];if(first.reservedAmountCents>0&&!first.revealedAt)first=await prisma.task.update({where:{id:first.id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
+    return res.status(201).json({success:true,session:{id:result.session.id,vipLevel:result.session.vipLevel,balanceSnapshotCents:result.session.balanceSnapshotCents,generatedTaskCount:result.session.generatedTaskCount,resetNumber:result.session.resetNumber,round:result.session.round,dayKey:result.session.dayKey,totalTaskAmountCents:result.session.totalTaskAmountCents,totalExpectedCommissionCents:result.session.totalExpectedCommissionCents,reservedAmountCents:result.session.reservedAmountCents},tasks:resultTasks.map(t=>taskPublic(t,false)),task:taskPublic(first,true),taskConfig:{taskCount:result.session.generatedTaskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,round:result.session.round,combinationTaskAssignments:config.combinationTaskAssignments}});
   }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",{operation:"task-start",code,error:error instanceof Error?error.message:String(error)});if(code==="DAILY_ROUND_LIMIT"||code==="LOW_BALANCE"||code==="TASK_AMOUNT_INVALID")return res.status(409).json({success:false,error:error instanceof Error?error.message:"Your available balance is not enough to start this task.",code});const unavailable=["YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXHAUSTED","YOUTUBE_API_ERROR","YOUTUBE_ZERO_RESULTS","YOUTUBE_CANDIDATES_REJECTED","NO_ELIGIBLE_HOLLYWOOD_MOVIE","NO_VALID_CACHED_MOVIE","NO_PLAYABLE_VIDEO","NO_PLAYABLE_MOVIE_VIDEO","VIDEO_NOT_PLAYABLE","VIDEO_NOT_EMBEDDABLE","VIDEO_UNAVAILABLE","POSTER_UNAVAILABLE","MOVIE_NOT_FOUND","YOUTUBE_DISCOVERY_COOLDOWN"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your movie right now. Please try again shortly.",code});}
 }));
 app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
