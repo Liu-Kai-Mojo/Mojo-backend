@@ -418,7 +418,7 @@ app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,
   // Treat that stale heartbeat as a terminal no-op instead of generating a 404
   // loop in the browser console.
   if(String(task.status)!==TaskStatus.PENDING){
-    return res.json({success:true,terminal:true,watchSeconds:Math.max(0,Number(task.watchAccumulatedMs||0))/1000,requiredWatchSeconds:task.requiredWatchSeconds,positionSeconds:Math.max(0,Number(task.watchLastPositionSeconds||0)});
+    return res.json({success:true,terminal:true,watchSeconds:Math.max(0,Number(task.watchAccumulatedMs||0))/1000,requiredWatchSeconds:task.requiredWatchSeconds,positionSeconds:Math.max(0,Number(task.watchLastPositionSeconds||0))});
   }
   if(!task.revealedAt||!task.videoId)return res.status(409).json({error:"Task video is not ready yet.",code:"TASK_VIDEO_NOT_READY"});
   const now=new Date();const previousHeartbeat=task.watchHeartbeatAt;const previousPosition=Math.max(0,Number(task.watchLastPositionSeconds||0));
