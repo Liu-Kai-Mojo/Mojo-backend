@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import { execFile, type ChildProcess } from "node:child_process";
 import { randomInt } from "node:crypto";
-import { Prisma, Role, IdentifierType, MessageStatus, TaskStatus } from "@prisma/client";
+import { Prisma, Role, IdentifierType, MessageStatus, TaskStatus, WalletRequestStatus } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
@@ -13,6 +13,22 @@ import { getTrendingVideoForClient, getTrendingVideosForClient, getAlternativeVi
 
 const app=express();
 app.set("trust proxy",1);
+
+type RealtimeClient = { response: express.Response; heartbeat: NodeJS.Timeout };
+const realtimeClients = new Map<string, Set<RealtimeClient>>();
+function addRealtimeClient(subject:string,res:express.Response){
+  const bucket=realtimeClients.get(subject)||new Set<RealtimeClient>();
+  const heartbeat=setInterval(()=>{try{res.write(": heartbeat\\n\\n");}catch{}},25000); heartbeat.unref();
+  bucket.add({response:res,heartbeat}); realtimeClients.set(subject,bucket);
+  const cleanup=()=>{clearInterval(heartbeat);bucket.forEach(x=>{if(x.response===res)bucket.delete(x)});if(!bucket.size)realtimeClients.delete(subject);};
+  res.on("close",cleanup); return cleanup;
+}
+function publishRealtime(subject:string,event:string,payload:unknown){
+  const bucket=realtimeClients.get(subject); if(!bucket)return;
+  const packet=`event: ${event}\\ndata: ${JSON.stringify(payload)}\\n\\n`;
+  for(const client of [...bucket]){try{client.response.write(packet);}catch{clearInterval(client.heartbeat);bucket.delete(client);}}
+}
+function walletRequestPublic(row:any){return {id:row.id,type:row.type,status:row.status,uid:row.userId,fullName:row.user?.name||"",identifier:row.user?.identifier||"",amountCents:row.amountCents,createdAt:row.createdAt,updatedAt:row.updatedAt};}
 const port=Number(process.env.PORT||8787);
 const isProduction=process.env.NODE_ENV==="production";
 const normalize=(v:string)=>v.trim().replace(/\/+$/g,"");
