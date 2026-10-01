@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { execFile, type ChildProcess } from "node:child_process";
+import { gzip } from "node:zlib";
 import { randomInt } from "node:crypto";
 import { Prisma, Role, IdentifierType, MessageStatus, TaskStatus, WalletRequestStatus } from "@prisma/client";
 import { z } from "zod";
@@ -44,6 +45,29 @@ app.disable("x-powered-by");
 app.use((req,res,next)=>{res.setHeader("X-Content-Type-Options","nosniff");res.setHeader("X-Frame-Options","DENY");res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");res.setHeader("Permissions-Policy","camera=(), microphone=(), geolocation=()");res.setHeader("Content-Security-Policy","default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");res.setHeader("Cross-Origin-Resource-Policy","same-site");if(isProduction)res.setHeader("Strict-Transport-Security","max-age=31536000; includeSubDomains");next();});
 app.use(cors({origin(origin,cb){if(!origin||origins.includes(normalize(origin)))return cb(null,true);return cb(new Error("Origin is not allowed by CORS."));},credentials:true,methods:["GET","POST","PATCH","DELETE","OPTIONS"],allowedHeaders:["Content-Type","Authorization","Idempotency-Key"]}));
 app.use(express.json({limit:"2mb"}));
+/* Keep authenticated JSON payloads compact on slower mobile connections. SSE is excluded. */
+app.use((req,res,next)=>{
+  const acceptsGzip=/gzip/i.test(String(req.headers["accept-encoding"]||""));
+  if(!acceptsGzip||req.path.endsWith("/events"))return next();
+  const originalJson=res.json.bind(res);
+  res.json=((body:any)=>{
+    if(res.headersSent)return originalJson(body);
+    const raw=JSON.stringify(body);
+    if(raw.length<1024)return originalJson(body);
+    gzip(Buffer.from(raw),(_,compressed)=>{
+      if(res.headersSent)return;
+      if(!compressed)return originalJson(body);
+      res.statusCode=res.statusCode||200;
+      res.setHeader("Content-Type","application/json; charset=utf-8");
+      res.setHeader("Content-Encoding","gzip");
+      res.setHeader("Vary","Accept-Encoding");
+      res.setHeader("Content-Length",compressed.byteLength);
+      res.end(compressed);
+    });
+    return res;
+  }) as typeof res.json;
+  next();
+});
 
 // Lightweight in-process rate limiting. This intentionally protects only sensitive API classes;
 // normal authenticated reads remain unrestricted. For multi-replica deployments, an upstream
@@ -957,6 +981,9 @@ app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.Nex
 });
 
 const server=app.listen(port,"0.0.0.0",()=>{console.log(`Box Office Mojo API listening on ${port}`);void runMigrationsUntilReady();});
+server.keepAliveTimeout=65_000;
+server.headersTimeout=66_000;
+server.requestTimeout=30_000;
 server.on("error",e=>{console.error(e);process.exitCode=1;});
 void upsertDefaultTaskPriceSettings().catch(error=>console.error("[pricing-config]",error));
 
