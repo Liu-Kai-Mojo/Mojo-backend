@@ -804,6 +804,7 @@ app.post("/api/admin/balances/:id/adjust",auth([Role.ADMIN]),asyncRoute(async(re
   await audit(res.locals.auth.sub,id,"CLIENT_BALANCE_ADJUSTED",{type:d.type,amountCents:d.amountCents});
   res.json({balance:{...safeUser(result),availableCents:Math.max(0,result.balanceCents-(result.frozenCents??0))},message:"Client balance adjustment saved."});
 }));
+app.delete("/api/admin/clients/:id",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{const id=param(req,"id");const client=await prisma.user.findFirst({where:{id,role:Role.CLIENT,adminId:res.locals.auth.sub}});if(!client)return res.status(404).json({error:"Client not found in your workspace."});await prisma.user.delete({where:{id:client.id}});await audit(res.locals.auth.sub,id,"CLIENT_DELETED");res.json({message:"Client account deleted."});}));
 app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{
   const id=param(req,"id");
   const d=z.object({name:z.string().trim().min(2).max(80).optional(),identifier:z.string().trim().min(5).max(120).optional(),password:z.string().min(6).max(100).optional(),withdrawalPassword:z.string().min(6).max(100).optional(),active:z.boolean().optional(),balanceCents:z.coerce.number().int().min(0).max(100000000).optional()}).parse(req.body);
