@@ -822,7 +822,9 @@ app.patch("/api/admin/clients/:id",auth(staff),asyncRoute(async(req,res)=>{
   let u=current;
   if(Object.keys(data).length){u=await prisma.user.update({where:{id},data});await audit(res.locals.auth.sub,id,"CLIENT_UPDATED",{fields:Object.keys(data)});}
   if(d.balanceCents!==undefined&&d.balanceCents!==current.balanceCents){const delta=d.balanceCents-current.balanceCents;await prisma.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:id,amountCents:delta,type:"ADMIN_ADJUSTMENT",note:"Balance updated by staff"}});}
-  res.json({user:safeUser(u),message:"Client changes saved."});
+  let walletAddress: string|undefined;
+  if(d.walletAddress!==undefined){const key=`wallet_client_${id}`;const value=d.walletAddress.trim();if(value){const setting=await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value},update:{value}});walletAddress=setting.value;}else{await prisma.setting.deleteMany({where:{key}});walletAddress="";}await audit(res.locals.auth.sub,id,"CLIENT_WALLET_UPDATED",{changed:true});}
+  res.json({user:safeUser(u),walletAddress:walletAddress??null,message:"Client changes saved."});
 }));
 app.post("/api/admin/clients",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
   const d=z.object({name:z.string().trim().min(2).max(80),identifier:z.string().trim().min(5).max(120),password:z.string().min(6).max(100)}).parse(req.body);
