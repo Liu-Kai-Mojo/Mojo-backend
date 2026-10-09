@@ -207,6 +207,12 @@ async function getTaskManagementConfig(clientId:string):Promise<TaskManagementCo
 }
 async function readBonusHistory(clientId:string):Promise<any[]>{const row=await prisma.setting.findUnique({where:{key:bonusHistoryKey(clientId)}});try{return row?.value?JSON.parse(row.value):[]}catch{return []}}
 async function writeBonusHistory(db:any,clientId:string,history:any[]){await db.setting.upsert({where:{key:bonusHistoryKey(clientId)},create:{id:await uniqueSettingId(),key:bonusHistoryKey(clientId),value:JSON.stringify(history.slice(-30))},update:{value:JSON.stringify(history.slice(-30))}})}
+async function bonusAcknowledged(clientId:string,bonus:BonusConfig|null|undefined):Promise<boolean>{
+  if(!bonus)return false;
+  const history=await readBonusHistory(clientId);
+  const latest=history.filter((item:any)=>String(item.content||"").trim()===String(bonus.content||"").trim()).sort((a:any,b:any)=>String(b.createdAt||"").localeCompare(String(a.createdAt||"")))[0];
+  return Boolean(latest?.confirmedAt);
+}
 async function saveTaskManagementConfig(db:any,clientId:string,config:TaskManagementConfig){
   await db.setting.upsert({where:{key:taskConfigKey(clientId)},create:{id:await uniqueSettingId(),key:taskConfigKey(clientId),value:JSON.stringify(config)},update:{value:JSON.stringify(config)}});
   await db.setting.upsert({where:{key:taskCycleKey(clientId)},create:{id:await uniqueSettingId(),key:taskCycleKey(clientId),value:String(config.cycleStartSequence)},update:{value:String(config.cycleStartSequence)}});
@@ -349,6 +355,21 @@ app.get("/api/client/support",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const setting=admin?await prisma.setting.findUnique({where:{key:`telegram_admin_${admin.id}`}}):null;
   res.json({admin:admin?{id:admin.id,name:admin.name}:null,telegramUsername:setting?.value||null});
 }));
+app.get("/api/client/bonus-history",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const clientId=res.locals.auth.sub;
+  res.json({bonusHistory:await readBonusHistory(clientId)});
+}));
+app.post("/api/client/bonus-history/:bonusId/confirm",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const clientId=res.locals.auth.sub;const bonusId=param(req,"bonusId");
+  if(!/^[A-Za-z0-9_-]{1,120}$/.test(bonusId))return res.status(400).json({error:"Invalid bonus notification ID."});
+  const history=await readBonusHistory(clientId);const item=history.find((entry:any)=>String(entry.id)===bonusId);
+  if(!item)return res.status(404).json({error:"This bonus notification is no longer available.",code:"BONUS_NOT_FOUND"});
+  if(item.confirmedAt)return res.json({success:true,bonus:item,bonusHistory:history});
+  const updated=history.map((entry:any)=>String(entry.id)===bonusId?{...entry,confirmedAt:new Date().toISOString(),acknowledgedBy:clientId}:entry);
+  await writeBonusHistory(prisma,clientId,updated);
+  await audit(clientId,clientId,"CLIENT_BONUS_CONFIRMED",{bonusId});
+  res.json({success:true,bonus:updated.find((entry:any)=>String(entry.id)===bonusId),bonusHistory:updated});
+}));
 app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({title:normalizeMovieTitle(v.movieTitle||v.title),movieTitle:normalizeMovieTitle(v.movieTitle||v.title),videoId:v.videoId,posterUrl:v.moviePosterUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const userId=res.locals.auth.sub;const config=await getTaskManagementConfig(userId);await reconcileLegacyTaskSettlementBalance(userId);
@@ -396,7 +417,7 @@ app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
 app.get("/api/client/history",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{await reconcileLegacyTaskSettlementBalance(res.locals.auth.sub);const rows=await prisma.task.findMany({where:{clientId:res.locals.auth.sub,status:TaskStatus.COMPLETED},include:{session:{select:{generatedTaskCount:true}}},orderBy:{completedAt:"desc"}});res.json({history:rows.map(t=>taskPublic(t,true))});}));
 app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const clientId=res.locals.auth.sub;await reconcileLegacyTaskSettlementBalance(clientId);const config=await getTaskManagementConfig(clientId);
-  if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
+  if(config.bonus&&!(await bonusAcknowledged(clientId,config.bonus)))return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
   const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
   try{
     const result:any=await prisma.$transaction(async tx=>{
@@ -470,7 +491,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
   const task=await prisma.task.findFirst({where:{id,clientId}});
   if(!task)return res.status(404).json({error:"Task not found."});
   const config=await getTaskManagementConfig(clientId);
-  if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
+  if(config.bonus&&!(await bonusAcknowledged(clientId,config.bonus)))return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
 
   // Some previously generated sessions already have the movie/video assigned
   // but have not been reserved/revealed yet. Reveal must therefore be the
@@ -611,7 +632,7 @@ app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,
 }));
 app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;await reconcileLegacyTaskSettlementBalance(clientId);const d=z.object({rating:z.coerce.number().int().min(1).max(5).nullable().optional(),watchedSeconds:z.coerce.number().finite().min(0).optional()}).parse(req.body||{});
-  const config=await getTaskManagementConfig(clientId);if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
+  const config=await getTaskManagementConfig(clientId);if(config.bonus&&!(await bonusAcknowledged(clientId,config.bonus)))return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
   try{
     const result=await prisma.$transaction(async tx=>{
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
