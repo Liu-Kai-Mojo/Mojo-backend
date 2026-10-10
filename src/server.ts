@@ -417,7 +417,7 @@ app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
 app.get("/api/client/history",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{await reconcileLegacyTaskSettlementBalance(res.locals.auth.sub);const rows=await prisma.task.findMany({where:{clientId:res.locals.auth.sub,status:TaskStatus.COMPLETED},include:{session:{select:{generatedTaskCount:true}}},orderBy:{completedAt:"desc"}});res.json({history:rows.map(t=>taskPublic(t,true))});}));
 app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const clientId=res.locals.auth.sub;await reconcileLegacyTaskSettlementBalance(clientId);const config=await getTaskManagementConfig(clientId);
-  if(config.bonus&&!(await bonusAcknowledged(clientId,config.bonus)))return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
+  if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account. Confirming the notice does not unlock tasks; the administrator must deactivate the bonus.",bonus:config.bonus});
   const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
   try{
     const result:any=await prisma.$transaction(async tx=>{
@@ -491,7 +491,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
   const task=await prisma.task.findFirst({where:{id,clientId}});
   if(!task)return res.status(404).json({error:"Task not found."});
   const config=await getTaskManagementConfig(clientId);
-  if(config.bonus&&!(await bonusAcknowledged(clientId,config.bonus)))return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
+  if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account. Confirming the notice does not unlock tasks; the administrator must deactivate the bonus.",bonus:config.bonus});
 
   // Some previously generated sessions already have the movie/video assigned
   // but have not been reserved/revealed yet. Reveal must therefore be the
@@ -632,7 +632,7 @@ app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,
 }));
 app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;await reconcileLegacyTaskSettlementBalance(clientId);const d=z.object({rating:z.coerce.number().int().min(1).max(5).nullable().optional(),watchedSeconds:z.coerce.number().finite().min(0).optional()}).parse(req.body||{});
-  const config=await getTaskManagementConfig(clientId);if(config.bonus&&!(await bonusAcknowledged(clientId,config.bonus)))return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account.",bonus:config.bonus});
+  const config=await getTaskManagementConfig(clientId);if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"A bonus notification is active for your account. Confirming the notice does not unlock tasks; the administrator must deactivate the bonus.",bonus:config.bonus});
   try{
     const result=await prisma.$transaction(async tx=>{
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
