@@ -593,6 +593,8 @@ app.post("/api/client/tasks/:id/video-retry",auth([Role.CLIENT]),asyncRoute(asyn
 }));
 app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;
+  const config=await getTaskManagementConfig(clientId);
+  if(config.bonus)return res.status(409).json({success:false,code:"BONUS_ACTIVE",error:"An active administrator bonus prevents task progress until the administrator deactivates it.",bonus:config.bonus});
   const d=z.object({
     playing:z.boolean(),
     positionSeconds:z.coerce.number().finite().min(0).max(86400).optional(),
