@@ -678,6 +678,17 @@ app.post("/api/client/wallet-requests",auth([Role.CLIENT]),asyncRoute(async(req,
   if(idem){const prior=await prisma.walletRequest.findUnique({where:{idempotencyKey:idem},include:{user:true}});if(prior&&prior.userId===clientId)return res.json({success:true,request:walletRequestPublic(prior),idempotent:true});}
   const request=await prisma.$transaction(async tx=>{
     const user=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{id:true,balanceCents:true,frozenCents:true,creditScore:true,adminId:true,withdrawalPasswordHash:true}});
+    if(d.type==="DEPOSIT"){
+      const activeSession=await tx.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"},select:{id:true}});
+      if(activeSession){
+        const nextPending=await tx.task.findFirst({where:{clientId,sessionId:activeSession.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
+        const available=Math.max(0,user.balanceCents-(user.frozenCents||0));
+        if(nextPending&&String(nextPending.taskType)==="COMBINATION"&&Math.max(0,Number(nextPending.reservedAmountCents||0))===0&&Number(nextPending.amountCents||0)>available){
+          const exactTopUpCents=Math.max(0,Number(nextPending.amountCents||0)-available);
+          if(d.amountCents!==exactTopUpCents)throw Object.assign(new Error(`This Admin-configured combination task requires an exact additional deposit of ${(exactTopUpCents/100).toFixed(2)}.`),{code:"COMBINATION_DEPOSIT_AMOUNT_MISMATCH",requiredAmountCents:exactTopUpCents});
+        }
+      }
+    }
     if(d.type==="WITHDRAW"){
       if(!user.withdrawalPasswordHash||!d.withdrawalPassword||!(await verifyPassword(d.withdrawalPassword,user.withdrawalPasswordHash)))throw Object.assign(new Error("The withdrawal password is not correct."),{code:"INVALID_WITHDRAWAL_PASSWORD"});
       const available=Math.max(0,user.balanceCents-(user.frozenCents||0));
