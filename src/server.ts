@@ -11,6 +11,7 @@ import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueWalletRequestId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
 import { getTrendingVideoForClient, getTrendingVideosForClient, getAlternativeVideoForTask, getCurrentTrailerCandidates, trendingConfig, normalizeMovieTitle } from "./trending.js";
+import { combinationFundingShortfallCents, isBonusAcknowledgedForContent, isProcessingTask } from "./taskEngineRules.js";
 
 const app=express();
 app.set("trust proxy",1);
@@ -207,12 +208,7 @@ async function getTaskManagementConfig(clientId:string):Promise<TaskManagementCo
 }
 async function readBonusHistory(clientId:string):Promise<any[]>{const row=await prisma.setting.findUnique({where:{key:bonusHistoryKey(clientId)}});try{return row?.value?JSON.parse(row.value):[]}catch{return []}}
 async function writeBonusHistory(db:any,clientId:string,history:any[]){await db.setting.upsert({where:{key:bonusHistoryKey(clientId)},create:{id:await uniqueSettingId(),key:bonusHistoryKey(clientId),value:JSON.stringify(history.slice(-30))},update:{value:JSON.stringify(history.slice(-30))}})}
-async function bonusAcknowledged(clientId:string,bonus:BonusConfig|null|undefined):Promise<boolean>{
-  if(!bonus)return false;
-  const history=await readBonusHistory(clientId);
-  const latest=history.filter((item:any)=>String(item.content||"").trim()===String(bonus.content||"").trim()).sort((a:any,b:any)=>String(b.createdAt||"").localeCompare(String(a.createdAt||"")))[0];
-  return Boolean(latest?.confirmedAt);
-}
+async function bonusAcknowledged(clientId:string,bonus:BonusConfig|null|undefined):Promise<boolean>{return isBonusAcknowledgedForContent(bonus,await readBonusHistory(clientId));}
 async function saveTaskManagementConfig(db:any,clientId:string,config:TaskManagementConfig){
   await db.setting.upsert({where:{key:taskConfigKey(clientId)},create:{id:await uniqueSettingId(),key:taskConfigKey(clientId),value:JSON.stringify(config)},update:{value:JSON.stringify(config)}});
   await db.setting.upsert({where:{key:taskCycleKey(clientId)},create:{id:await uniqueSettingId(),key:taskCycleKey(clientId),value:String(config.cycleStartSequence)},update:{value:String(config.cycleStartSequence)}});
@@ -429,11 +425,11 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       if(active){
         const pending=await tx.task.findFirst({where:{sessionId:active.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
         if(pending){
-          if(pending.reservedAmountCents>0)throw Object.assign(new Error("Please finish your current processing task before starting another task."),{code:"PROCESSING_TASK_EXISTS",task:pending});
+          if(isProcessingTask(pending))throw Object.assign(new Error("Please finish your current processing task before starting another task."),{code:"PROCESSING_TASK_EXISTS",task:pending});
           const existingTicketRows=await tx.task.findMany({where:{sessionId:active.id,id:{not:pending.id}},select:{ticketCount:true}});
           const usedTicketCounts=new Set<number>(existingTicketRows.map(row=>Math.max(1,Number(row.ticketCount||0))).filter(n=>n>1));
           if(pending.taskType==="COMBINATION"){
-            if(available<pending.amountCents)return {session:active,task:pending,resumed:true,insufficientCombination:true,requiredAmountCents:Math.max(0,pending.amountCents-available),availableBalanceCents:available};
+            if(available<pending.amountCents)return {session:active,task:pending,resumed:true,insufficientCombination:true,requiredAmountCents:combinationFundingShortfallCents(pending.amountCents,available),availableBalanceCents:available};
             const rateBps=1500;const commission=Math.max(1,Math.round(pending.amountCents*rateBps/10000));
             await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:pending.amountCents}}});
             const reserved=await tx.task.update({where:{id:pending.id},data:{commissionCents:commission,ticketCount:nextUniqueTicketCount(pending.amountCents,usedTicketCounts),commissionRateBps:rateBps,reservedAmountCents:pending.amountCents,revealedAt:pending.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
@@ -481,7 +477,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       const session=await tx.taskSession.create({data:{id:sessionId,clientId,vipLevel:config.vipLevel,balanceSnapshotCents:user.balanceCents,generatedTaskCount:taskCount,totalTaskAmountCents:totalAmount,totalExpectedCommissionCents:totalCommission,resetNumber:config.resetCount,round,dayKey,reservedAmountCents:reserveFirst?firstData.amountCents:0,taskCountOverride:taskCount,amountOverrideCents:null,combinationTaskCount:taskData.filter(t=>t.taskType==="COMBINATION").length,combinationTaskAmountCents:config.combinationTaskAmountCents,combinationCommissionRateBps:1500}});
      const usedTicketCounts=new Set<number>();
      for(const data of taskData)data.ticketCount=nextUniqueTicketCount(data.amountCents,usedTicketCounts);
-      const taskRows:any[]=[];for(const data of taskData)taskRows.push(await tx.task.create({data}));const needsCombinationFunding=firstData.taskType==="COMBINATION"&&!reserveFirst;return {session,tasks:taskRows,insufficientCombination:needsCombinationFunding,requiredAmountCents:needsCombinationFunding?Math.max(0,firstData.amountCents-available):0,availableBalanceCents:available};
+      const taskRows:any[]=[];for(const data of taskData)taskRows.push(await tx.task.create({data}));const needsCombinationFunding=firstData.taskType==="COMBINATION"&&!reserveFirst;return {session,tasks:taskRows,insufficientCombination:needsCombinationFunding,requiredAmountCents:needsCombinationFunding?combinationFundingShortfallCents(firstData.amountCents,available):0,availableBalanceCents:available};
     },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
     const resultTasks:any[]=Array.isArray(result.tasks)?result.tasks:[result.task];let first=resultTasks[0];if(first.reservedAmountCents>0&&!first.revealedAt)first=await prisma.task.update({where:{id:first.id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
     const needsCombinationFunding=Boolean(result.insufficientCombination)||(first.taskType==="COMBINATION"&&Number(first.reservedAmountCents||0)===0);return res.status(result.idempotent?200:201).json({success:true,idempotent:Boolean(result.idempotent),code:needsCombinationFunding?"COMBINATION_TASK_FUNDING_REQUIRED":undefined,requiredAmountCents:Number(result.requiredAmountCents||0),availableBalanceCents:Number(result.availableBalanceCents||0),session:{id:result.session.id,vipLevel:result.session.vipLevel,balanceSnapshotCents:result.session.balanceSnapshotCents,generatedTaskCount:result.session.generatedTaskCount,resetNumber:result.session.resetNumber,round:result.session.round,dayKey:result.session.dayKey,totalTaskAmountCents:result.session.totalTaskAmountCents,totalExpectedCommissionCents:result.session.totalExpectedCommissionCents,reservedAmountCents:result.session.reservedAmountCents},tasks:resultTasks.map(t=>taskPublic(t,false)),task:taskPublic(first,true),taskConfig:{taskCount:result.session.generatedTaskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,round:result.session.round,combinationTaskAssignments:config.combinationTaskAssignments}});
