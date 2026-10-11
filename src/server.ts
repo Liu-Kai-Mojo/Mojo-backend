@@ -412,8 +412,9 @@ app.get("/api/client/tasks",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
 }));
 app.get("/api/client/history",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{await reconcileLegacyTaskSettlementBalance(res.locals.auth.sub);const rows=await prisma.task.findMany({where:{clientId:res.locals.auth.sub,status:TaskStatus.COMPLETED},include:{session:{select:{generatedTaskCount:true}}},orderBy:{completedAt:"desc"}});res.json({history:rows.map(t=>taskPublic(t,true))});}));
 app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
-  const clientId=res.locals.auth.sub;await reconcileLegacyTaskSettlementBalance(clientId);const config=await getTaskManagementConfig(clientId);
+  const clientId=res.locals.auth.sub;const config=await getTaskManagementConfig(clientId);
   if(config.bonus&&!(await bonusAcknowledged(clientId,config.bonus)))return res.status(409).json({success:false,code:"BONUS_ACK_REQUIRED",error:"Please confirm the active bonus notification before starting another task.",bonus:config.bonus});
+  await reconcileLegacyTaskSettlementBalance(clientId);
   const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
   try{
     const result:any=await prisma.$transaction(async tx=>{
