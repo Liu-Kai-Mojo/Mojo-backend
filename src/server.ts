@@ -546,7 +546,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       if(String(current.status)!==TaskStatus.PENDING)return {task:current};
        const existingReservation=Math.max(0,Number(current.reservedAmountCents||0));
        if(existingReservation>0){
-         if(preparedVideo&&String(current.videoProvider||"")!=="direct"){
+         if(preparedVideo&&(!current.videoId||String(current.videoProvider||"")!=="direct")){
            // Preserve the financial reservation and task amount while resetting
            // watch progress because it belongs to the previous video.
            const migrated=await tx.task.update({where:{id:current.id},data:{
