@@ -417,6 +417,28 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
   await reconcileLegacyTaskSettlementBalance(clientId);
   const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
   try{
+    /*
+     * Never perform YouTube/network discovery inside the Prisma transaction.
+     * Prisma's default interactive-transaction timeout is short; remote search,
+     * poster checks and cache validation can outlive it and roll back task start.
+     * Preflight only when there is no task to resume. The transaction below
+     * still re-checks the active session and balance under the client lock.
+     */
+    let preparedVideos:any[]|null=null;
+    let preparedVideoTaskCount=0;
+    const preflightSession=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
+    const preflightPending=preflightSession?await prisma.task.findFirst({where:{sessionId:preflightSession.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}}):null;
+    if(!preflightPending){
+      const preflightVipRow=await prisma.setting.findUnique({where:{key:vipRuleKey(config.vipLevel)}});
+      const preflightFallback=defaultVipRule(config.vipLevel);
+      let preflightVipRule=preflightFallback;
+      try{
+        const parsed=JSON.parse(preflightVipRow?.value||"{}");
+        preflightVipRule={taskCount:clampTaskCount(Number(parsed.taskCount??preflightFallback.taskCount)),commissionRateBps:clampRateBps(Number(parsed.commissionRateBps??preflightFallback.commissionRateBps))};
+      }catch{}
+      preparedVideoTaskCount=preflightVipRule.taskCount;
+      preparedVideos=await getTrendingVideosForClient(clientId,preparedVideoTaskCount);
+    }
     const result:any=await prisma.$transaction(async tx=>{
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
       if(idempotencyKey){const prior=await tx.task.findUnique({where:{idempotencyKey},include:{session:true}});if(prior){if(prior.clientId!==clientId)throw Object.assign(new Error("This idempotency key was already used for another account."),{code:"IDEMPOTENCY_CONFLICT"});if(!prior.session)throw Object.assign(new Error("The existing task session could not be found."),{code:"IDEMPOTENCY_CONFLICT"});return {session:prior.session,task:prior,idempotent:true};}}
@@ -456,8 +478,14 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       const latestCompleted=await tx.taskSession.findFirst({where:{clientId,dayKey,status:"COMPLETED"},orderBy:{createdAt:"desc"},select:{round:true}});
       if(latestCompleted&&Number(latestCompleted.round||0)===round)throw Object.assign(new Error("This task round is already complete. Please reset the task cycle before starting the next round."),{code:"ROUND_RESET_REQUIRED"});
       const vipRow=await tx.setting.findUnique({where:{key:vipRuleKey(config.vipLevel)}});const fallback=defaultVipRule(config.vipLevel);let vipRule=fallback;try{const p=JSON.parse(vipRow?.value||"{}");vipRule={taskCount:clampTaskCount(Number(p.taskCount??fallback.taskCount)),commissionRateBps:clampRateBps(Number(p.commissionRateBps??fallback.commissionRateBps))};}catch{}
-      const taskCount=vipRule.taskCount;let videos:any[];
-      try{videos=await getTrendingVideosForClient(clientId,taskCount);}catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");throw Object.assign(new Error(error instanceof Error?error.message:"We couldn't prepare your movie tasks right now."),{code});}
+      const taskCount=vipRule.taskCount;
+      // A concurrent admin config change can alter the VIP task count after
+      // preflight. Abort cleanly and let the client retry rather than doing
+      // slow external requests while holding a database transaction open.
+      if(!preparedVideos||preparedVideoTaskCount!==taskCount||preparedVideos.length<taskCount){
+        throw Object.assign(new Error("Task video preparation changed while Starting was in progress. Please try again."),{code:"VIDEO_POOL_STALE"});
+      }
+      const videos=preparedVideos.slice(0,taskCount);
       const sessionId=await uniqueTaskSessionId();const latestTask=await tx.task.findFirst({where:{clientId},select:{sequence:true},orderBy:{sequence:"desc"}});const sequenceStart=Math.max(config.cycleStartSequence,(latestTask?.sequence??0)+1);
       const assignments=config.combinationTaskAssignments.filter(a=>a.round===round);const taskData:any[]=[];const amounts:number[]=[];
       for(let i=0;i<taskCount;i++){
@@ -482,7 +510,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
     },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
     const resultTasks:any[]=Array.isArray(result.tasks)?result.tasks:[result.task];let first=resultTasks[0];if(first.reservedAmountCents>0&&!first.revealedAt)first=await prisma.task.update({where:{id:first.id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
     const needsCombinationFunding=Boolean(result.insufficientCombination)||(first.taskType==="COMBINATION"&&Number(first.reservedAmountCents||0)===0);return res.status(result.idempotent?200:201).json({success:true,idempotent:Boolean(result.idempotent),code:needsCombinationFunding?"COMBINATION_TASK_FUNDING_REQUIRED":undefined,requiredAmountCents:Number(result.requiredAmountCents||0),availableBalanceCents:Number(result.availableBalanceCents||0),session:{id:result.session.id,vipLevel:result.session.vipLevel,balanceSnapshotCents:result.session.balanceSnapshotCents,generatedTaskCount:result.session.generatedTaskCount,resetNumber:result.session.resetNumber,round:result.session.round,dayKey:result.session.dayKey,totalTaskAmountCents:result.session.totalTaskAmountCents,totalExpectedCommissionCents:result.session.totalExpectedCommissionCents,reservedAmountCents:result.session.reservedAmountCents},tasks:resultTasks.map(t=>taskPublic(t,false)),task:taskPublic(first,true),taskConfig:{taskCount:result.session.generatedTaskCount,resetCount:config.resetCount,vipLevel:config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,round:result.session.round,combinationTaskAssignments:config.combinationTaskAssignments}});
-  }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",{operation:"task-start",code,error:error instanceof Error?error.message:String(error)});if(code==="P2002"){const existing=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,reservedAmountCents:{gt:0}},orderBy:{sequence:"asc"}});if(existing)return res.status(409).json({success:false,code:"PROCESSING_TASK_EXISTS",error:"Please finish your current processing task before starting another task.",task:taskPublic(existing,true)});}if(code==="PROCESSING_TASK_EXISTS"||code==="PENDING_TASK_EXISTS")return res.status(409).json({success:false,code:"PROCESSING_TASK_EXISTS",error:error instanceof Error?error.message:"Please finish your current processing task before starting another task.",task:(error as any)?.task?taskPublic((error as any).task,true):undefined});if(code==="IDEMPOTENCY_CONFLICT")return res.status(409).json({success:false,code,error:error instanceof Error?error.message:"This request key conflicts with an existing task."});if(code==="DAILY_ROUND_LIMIT"||code==="ROUND_RESET_REQUIRED"||code==="LOW_BALANCE"||code==="TASK_AMOUNT_INVALID")return res.status(409).json({success:false,error:error instanceof Error?error.message:"Your available balance is not enough to start this task.",code});const unavailable=["YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXHAUSTED","YOUTUBE_API_ERROR","YOUTUBE_ZERO_RESULTS","YOUTUBE_CANDIDATES_REJECTED","NO_ELIGIBLE_HOLLYWOOD_MOVIE","NO_VALID_CACHED_MOVIE","NO_PLAYABLE_VIDEO","NO_PLAYABLE_MOVIE_VIDEO","VIDEO_NOT_PLAYABLE","VIDEO_NOT_EMBEDDABLE","VIDEO_UNAVAILABLE","POSTER_UNAVAILABLE","MOVIE_NOT_FOUND","YOUTUBE_DISCOVERY_COOLDOWN"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your movie right now. Please try again shortly.",code});}
+  }catch(error){const code=String((error as any)?.code||"TASK_CREATION_FAILED");console.error("[task-start]",{operation:"task-start",code,error:error instanceof Error?error.message:String(error)});if(code==="P2002"){const existing=await prisma.task.findFirst({where:{clientId,status:TaskStatus.PENDING,reservedAmountCents:{gt:0}},orderBy:{sequence:"asc"}});if(existing)return res.status(409).json({success:false,code:"PROCESSING_TASK_EXISTS",error:"Please finish your current processing task before starting another task.",task:taskPublic(existing,true)});}if(code==="PROCESSING_TASK_EXISTS"||code==="PENDING_TASK_EXISTS")return res.status(409).json({success:false,code:"PROCESSING_TASK_EXISTS",error:error instanceof Error?error.message:"Please finish your current processing task before starting another task.",task:(error as any)?.task?taskPublic((error as any).task,true):undefined});if(code==="IDEMPOTENCY_CONFLICT")return res.status(409).json({success:false,code,error:error instanceof Error?error.message:"This request key conflicts with an existing task."});if(code==="DAILY_ROUND_LIMIT"||code==="ROUND_RESET_REQUIRED"||code==="LOW_BALANCE"||code==="TASK_AMOUNT_INVALID")return res.status(409).json({success:false,error:error instanceof Error?error.message:"Your available balance is not enough to start this task.",code});const unavailable=["YOUTUBE_AUTH_ERROR","YOUTUBE_QUOTA_EXHAUSTED","YOUTUBE_API_ERROR","YOUTUBE_ZERO_RESULTS","YOUTUBE_CANDIDATES_REJECTED","NO_ELIGIBLE_HOLLYWOOD_MOVIE","NO_VALID_CACHED_MOVIE","NO_PLAYABLE_VIDEO","NO_PLAYABLE_MOVIE_VIDEO","VIDEO_NOT_PLAYABLE","VIDEO_NOT_EMBEDDABLE","VIDEO_UNAVAILABLE","POSTER_UNAVAILABLE","MOVIE_NOT_FOUND","YOUTUBE_DISCOVERY_COOLDOWN","VIDEO_POOL_STALE"];return res.status(unavailable.includes(code)?503:500).json({success:false,error:"We couldn't prepare your movie right now. Please try again shortly.",code});}
 }));
 app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;await reconcileLegacyTaskSettlementBalance(clientId);
