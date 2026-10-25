@@ -82,9 +82,9 @@ function parseDuration(value:string){
 function clean(value:string){return value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();}
 export function normalizeMovieTitle(value:string){const raw=clean(value).replace(/\s+/g," ");if(!raw)return "Movie";return raw.replace(/\s*[|–—:-]\s*(?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+|movie\s+)*(?:official\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?$/i,"").replace(/\s*\((?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?\)$/i,"").replace(/\s+\b(?:official|new|latest|exclusive|final)\s+(?:trailer|teaser)\b.*$/i,"").replace(/\s*[-–—|]+\s*$/,"").trim()||raw;}
 const OPEN_LICENSED_VIDEO_FALLBACKS:TrendingVideo[]=[
-  {provider:"direct",videoId:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny_Trailer_1080p.ogv",title:"Big Buck Bunny — Open Movie Trailer",description:"Creative Commons open movie trailer.",channelId:"blender-open-movie",channelTitle:"Blender Foundation",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny.jpg",durationSeconds:33,publishedAt:"2008-03-01T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:80,movieId:"open-bbb",movieTitle:"Big Buck Bunny",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny.jpg",movieReleaseDate:"2008-03-01T00:00:00.000Z",movieYear:2008,movieGenre:"Animation, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
-  {provider:"direct",videoId:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel_trailer-1080p.ogv",title:"Sintel — Open Movie Trailer",description:"Creative Commons open movie trailer.",channelId:"blender-open-movie",channelTitle:"Blender Foundation",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel.jpg",durationSeconds:52,publishedAt:"2010-05-13T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:79,movieId:"open-sintel",movieTitle:"Sintel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel.jpg",movieReleaseDate:"2010-05-13T00:00:00.000Z",movieYear:2010,movieGenre:"Fantasy, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
-  {provider:"direct",videoId:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_clip.ogv",title:"Tears of Steel — Open Movie Scene",description:"Creative Commons open movie scene.",channelId:"blender-open-movie",channelTitle:"Blender Foundation",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_frame_05_6a.jpg",durationSeconds:60,publishedAt:"2012-09-26T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:78,movieId:"open-tos",movieTitle:"Tears of Steel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_frame_05_6a.jpg",movieReleaseDate:"2012-09-26T00:00:00.000Z",movieYear:2012,movieGenre:"Science Fiction, Action",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"}
+  {provider:"direct",videoId:"https://video.blender.org/static/webseed/bf1f3fb5-b119-4f9f-9930-8e20e892b898-720.mp4",title:"Big Buck Bunny — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / bigbuckbunny.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny.jpg",durationSeconds:596,publishedAt:"2008-03-01T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:80,movieId:"open-bbb",movieTitle:"Big Buck Bunny",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny.jpg",movieReleaseDate:"2008-03-01T00:00:00.000Z",movieYear:2008,movieGenre:"Animation, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
+  {provider:"direct",videoId:"https://video.blender.org/static/webseed/0eb052d0-fd51-43e6-aa33-ecdbf77a5d40-720.mp4",title:"Sintel — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / durian.blender.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel.jpg",durationSeconds:888,publishedAt:"2010-05-13T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:79,movieId:"open-sintel",movieTitle:"Sintel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel.jpg",movieReleaseDate:"2010-05-13T00:00:00.000Z",movieYear:2010,movieGenre:"Fantasy, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
+  {provider:"direct",videoId:"https://video.blender.org/static/webseed/8533ea43-4271-4a57-9694-e9d0b35e1aa1-720.mp4",title:"Tears of Steel — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / mango.blender.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_frame_05_6a.jpg",durationSeconds:734,publishedAt:"2012-09-26T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:78,movieId:"open-tos",movieTitle:"Tears of Steel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_frame_05_6a.jpg",movieReleaseDate:"2012-09-26T00:00:00.000Z",movieYear:2012,movieGenre:"Science Fiction, Action",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"}
 ];
 function openLicensedFallback(clientId:string,count:number){
   const shuffled=[...OPEN_LICENSED_VIDEO_FALLBACKS].sort(()=>Math.random()-0.5);
@@ -461,10 +461,25 @@ export async function getTrendingVideosForClient(clientId:string,count:number){
       const discovered=await discoverAndCache(cfg);
       if(discovered.length)return selectMany(clientId,[...discovered,...staticPool.filter(v=>!discovered.some(p=>p.videoId===v.videoId))],count,cfg);
     }catch(error){
-      const fallback=await loadCache(cfg,true);
-      if(fallback.length)return selectMany(clientId,[...fallback,...staticPool.filter(v=>!fallback.some(p=>p.videoId===v.videoId))],count,cfg);
+      // Keep task start independent from YouTube API quota, search availability,
+      // or embed restrictions. Prefer already cached/verified Hollywood videos,
+      // then add only openly licensed direct-stream fallbacks hosted by Blender.
+      const fallback=await loadCache(cfg,true).catch(()=>[]);
+      const licensed=openLicensedFallback(clientId,OPEN_LICENSED_VIDEO_FALLBACKS.length);
+      const fallbackPool=[
+        ...fallback,
+        ...staticPool.filter(v=>!fallback.some(p=>p.videoId===v.videoId)),
+        ...licensed.filter(v=>!fallback.some(p=>p.videoId===v.videoId)&&!staticPool.some(p=>p.videoId===v.videoId))
+      ];
+      if(fallbackPool.length)return selectMany(clientId,fallbackPool,count,cfg);
     }
-    return selectMany(clientId,staticPool,count,cfg);
+    // Last-resort mixed pool: cached/verified YouTube trailers plus licensed
+    // native MP4 sources. The client already supports provider="direct".
+    return selectMany(clientId,[
+      ...staticPool,
+      ...openLicensedFallback(clientId,OPEN_LICENSED_VIDEO_FALLBACKS.length)
+        .filter(v=>!staticPool.some(p=>p.videoId===v.videoId))
+    ],count,cfg);
   }
   return openLicensedFallback(clientId,count);
 }
