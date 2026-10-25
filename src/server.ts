@@ -522,11 +522,13 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
   // but have not been reserved/revealed yet. Reveal must therefore be the
   // authoritative reserve + reveal operation, not just a metadata lookup.
   let preparedVideo:any=null;
-  if(!task.videoId){
+  // Existing pending tasks may still contain a legacy YouTube video ID. Replace
+  // it with a licensed direct MP4 before returning any task to the Client.
+  if(!task.videoId||String(task.videoProvider||"")!=="direct"){
     try{
-      preparedVideo=await getAlternativeVideoForTask(clientId,task.movieTitle||null,null);
+      preparedVideo=await getAlternativeVideoForTask(clientId,task.movieTitle||null,task.videoId||null);
     }catch(error){
-      const message=error instanceof Error?error.message:"Trending videos are temporarily unavailable.";
+      const message=error instanceof Error?error.message:"Licensed videos are temporarily unavailable.";
       return res.status(503).json({error:message,code:"TRENDING_VIDEO_UNAVAILABLE"});
     }
   }
@@ -544,6 +546,20 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       if(String(current.status)!==TaskStatus.PENDING)return {task:current};
        const existingReservation=Math.max(0,Number(current.reservedAmountCents||0));
        if(existingReservation>0){
+         if(preparedVideo&&String(current.videoProvider||"")!=="direct"){
+           // Preserve the financial reservation and task amount while resetting
+           // watch progress because it belongs to the previous video.
+           const migrated=await tx.task.update({where:{id:current.id},data:{
+             videoProvider:"direct",videoId:preparedVideo.videoId,videoTitle:preparedVideo.title,movieTitle:preparedVideo.movieTitle,
+             moviePosterUrl:preparedVideo.moviePosterUrl,movieReleaseDate:preparedVideo.movieReleaseDate?new Date(preparedVideo.movieReleaseDate):null,
+             videoChannelId:preparedVideo.channelId||null,videoChannelTitle:preparedVideo.channelTitle,videoThumbnailUrl:preparedVideo.thumbnailUrl,
+             videoDurationSeconds:preparedVideo.durationSeconds,videoPublishedAt:preparedVideo.publishedAt?new Date(preparedVideo.publishedAt):null,
+             videoCategoryId:preparedVideo.categoryId,videoViewCount:preparedVideo.viewCount??0,videoLikeCount:preparedVideo.likeCount??0,
+             videoCommentCount:preparedVideo.commentCount??0,videoLiveBroadcastContent:preparedVideo.liveBroadcastContent||"none",
+             revealedAt:current.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null
+           }});
+           return {task:migrated};
+         }
          if(!current.revealedAt){
            const repaired=await tx.task.update({where:{id:current.id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
            return {task:repaired};
