@@ -291,16 +291,18 @@ async function validateCachedVideo(row:any){
   const movieId=String(row.movieId||"").trim();
   const movie=movieId?await prisma.movie.findUnique({where:{id:movieId}}):null;
   if(!videoId||!thumbnail||!movie||!isEligibleHollywoodMovie(movie))return {valid:false,reason:"MISSING_REQUIRED_METADATA"};
-  const poster=await ensureMoviePoster(movie,String(row.moviePosterUrl||""));
-  if(!poster)return {valid:false,reason:"POSTER_UNAVAILABLE"};
   const [oembedOk,thumbnailOk]=await Promise.all([
     fetchExternalOk("https://www.youtube.com/oembed?url="+encodeURIComponent("https://www.youtube.com/watch?v="+videoId)+"&format=json"),
     fetchExternalOk(thumbnail)
   ]);
   if(!oembedOk)return {valid:false,reason:"VIDEO_UNAVAILABLE"};
   if(!thumbnailOk)return {valid:false,reason:"THUMBNAIL_UNAVAILABLE"};
+  // A temporarily unreachable poster host must not invalidate an otherwise
+  // playable, public, embeddable video. Fall back to its verified video
+  // thumbnail so the task can still start and the card never stays blank.
+  const poster=await ensureMoviePoster(movie,String(row.moviePosterUrl||""))||thumbnail;
   if(poster!==String(row.moviePosterUrl||""))await prisma.trailerCache.update({where:{videoId},data:{moviePosterUrl:poster}});
-  return {valid:true,reason:"OK",posterUrl:poster};
+  return {valid:true,reason:poster===thumbnail?"OK_WITH_VIDEO_THUMBNAIL":"OK",posterUrl:poster};
 }
 const CACHE_REVALIDATION_MS=15*60_000;
 async function loadCache(cfg:TrendingConfig,allowStale=false){
