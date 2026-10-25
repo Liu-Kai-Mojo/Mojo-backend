@@ -366,7 +366,7 @@ app.post("/api/client/bonus-history/:bonusId/confirm",auth([Role.CLIENT]),asyncR
   await audit(clientId,clientId,"CLIENT_BONUS_CONFIRMED",{bonusId});
   res.json({success:true,bonus:updated.find((entry:any)=>String(entry.id)===bonusId),bonusHistory:updated});
 }));
-app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({title:normalizeMovieTitle(v.movieTitle||v.title),movieTitle:normalizeMovieTitle(v.movieTitle||v.title),videoId:v.videoId,posterUrl:v.moviePosterUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
+app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({provider:v.provider,title:normalizeMovieTitle(v.movieTitle||v.title),movieTitle:normalizeMovieTitle(v.movieTitle||v.title),videoId:v.videoId,posterUrl:v.moviePosterUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const userId=res.locals.auth.sub;const config=await getTaskManagementConfig(userId);await reconcileLegacyTaskSettlementBalance(userId);
   const session=await prisma.taskSession.findFirst({where:{clientId:userId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
