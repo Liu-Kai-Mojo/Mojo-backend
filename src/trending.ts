@@ -82,9 +82,9 @@ function parseDuration(value:string){
 function clean(value:string){return value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();}
 export function normalizeMovieTitle(value:string){const raw=clean(value).replace(/\s+/g," ");if(!raw)return "Movie";return raw.replace(/\s*[|–—:-]\s*(?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+|movie\s+)*(?:official\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?$/i,"").replace(/\s*\((?:the\s+)?(?:new\s+|latest\s+|official\s+|exclusive\s+|final\s+)?(?:trailer|teaser)(?:\s*(?:#|part|pt\.?|\d+).*)?\)$/i,"").replace(/\s+\b(?:official|new|latest|exclusive|final)\s+(?:trailer|teaser)\b.*$/i,"").replace(/\s*[-–—|]+\s*$/,"").trim()||raw;}
 const OPEN_LICENSED_VIDEO_FALLBACKS:TrendingVideo[]=[
-  {provider:"direct",videoId:"https://video.blender.org/static/webseed/bf1f3fb5-b119-4f9f-9930-8e20e892b898-720.mp4",title:"Big Buck Bunny — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / bigbuckbunny.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny.jpg",durationSeconds:596,publishedAt:"2008-03-01T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:80,movieId:"open-bbb",movieTitle:"Big Buck Bunny",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Big_Buck_Bunny.jpg",movieReleaseDate:"2008-03-01T00:00:00.000Z",movieYear:2008,movieGenre:"Animation, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
-  {provider:"direct",videoId:"https://video.blender.org/static/webseed/0eb052d0-fd51-43e6-aa33-ecdbf77a5d40-720.mp4",title:"Sintel — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / durian.blender.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel.jpg",durationSeconds:888,publishedAt:"2010-05-13T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:79,movieId:"open-sintel",movieTitle:"Sintel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sintel.jpg",movieReleaseDate:"2010-05-13T00:00:00.000Z",movieYear:2010,movieGenre:"Fantasy, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
-  {provider:"direct",videoId:"https://video.blender.org/static/webseed/8533ea43-4271-4a57-9694-e9d0b35e1aa1-720.mp4",title:"Tears of Steel — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / mango.blender.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_frame_05_6a.jpg",durationSeconds:734,publishedAt:"2012-09-26T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:78,movieId:"open-tos",movieTitle:"Tears of Steel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:Redirect/file/Tears_of_Steel_frame_05_6a.jpg",movieReleaseDate:"2012-09-26T00:00:00.000Z",movieYear:2012,movieGenre:"Science Fiction, Action",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"}
+  {provider:"direct",videoId:"https://video.blender.org/static/webseed/bf1f3fb5-b119-4f9f-9930-8e20e892b898-720.mp4",title:"Big Buck Bunny — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / bigbuckbunny.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/500px-Big_buck_bunny_poster_big.jpg",durationSeconds:596,publishedAt:"2008-03-01T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:80,movieId:"open-bbb",movieTitle:"Big Buck Bunny",moviePosterUrl:"https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/500px-Big_buck_bunny_poster_big.jpg",movieReleaseDate:"2008-03-01T00:00:00.000Z",movieYear:2008,movieGenre:"Animation, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
+  {provider:"direct",videoId:"https://video.blender.org/static/webseed/0eb052d0-fd51-43e6-aa33-ecdbf77a5d40-720.mp4",title:"Sintel — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / durian.blender.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Sintel_poster.jpg/500px-Sintel_poster.jpg",durationSeconds:888,publishedAt:"2010-05-13T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:79,movieId:"open-sintel",movieTitle:"Sintel",moviePosterUrl:"https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Sintel_poster.jpg/500px-Sintel_poster.jpg",movieReleaseDate:"2010-05-13T00:00:00.000Z",movieYear:2010,movieGenre:"Fantasy, Adventure",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"},
+  {provider:"direct",videoId:"https://video.blender.org/static/webseed/8533ea43-4271-4a57-9694-e9d0b35e1aa1-720.mp4",title:"Tears of Steel — Open Movie",description:"Blender Foundation open movie. Creative Commons Attribution 3.0; attribution required: Blender Foundation / mango.blender.org.",channelId:"blender-open-movie",channelTitle:"Blender Foundation · Open Movies",thumbnailUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Tos-poster.png?width=500",durationSeconds:734,publishedAt:"2012-09-26T00:00:00.000Z",categoryId:"1",viewCount:0,likeCount:0,commentCount:0,liveBroadcastContent:"none",score:78,movieId:"open-tos",movieTitle:"Tears of Steel",moviePosterUrl:"https://commons.wikimedia.org/wiki/Special:FilePath/Tos-poster.png?width=500",movieReleaseDate:"2012-09-26T00:00:00.000Z",movieYear:2012,movieGenre:"Science Fiction, Action",movieOriginalLanguage:"en",movieCountries:"Netherlands",movieProductionCompanies:"Blender Foundation",movieDistributor:"Blender Foundation"}
 ];
 function openLicensedFallback(clientId:string,count:number){
   const shuffled=[...OPEN_LICENSED_VIDEO_FALLBACKS].sort(()=>Math.random()-0.5);
@@ -444,94 +444,38 @@ async function discoverAndCache(cfg:TrendingConfig){
     throw error;
   }
 }
+// MOJO uses licensed, direct-stream video sources only. No YouTube API,
+// iframe, embed, search, or cached YouTube record is used by live task flows.
+function directOnlySelection(clientId:string,count:number){
+  void clientId;
+  const pool=[...OPEN_LICENSED_VIDEO_FALLBACKS].sort(()=>Math.random()-0.5);
+  const wanted=Math.max(1,Math.min(100,Math.trunc(Number(count)||1)));
+  const selected:TrendingVideo[]=[];
+  for(let i=0;i<wanted;i++)selected.push({...pool[i%pool.length]});
+  return selected.sort(()=>Math.random()-0.5);
+}
 export async function getTrendingVideosForClient(clientId:string,count:number){
-  const cfg=await config();
-  if(cfg.enabled){
-    await ensureVerifiedHollywoodCache();
-    const staticPool=verifiedStaticPool();
-    const pool=await loadCache(cfg);
-    // Keep the curated Hollywood pool authoritative even when some poster
-    // hosts temporarily fail validation. This prevents the Client from
-    // collapsing to only the few rows that happen to validate at that moment.
-    if(pool.length>=count)return selectMany(clientId,pool,count,cfg);
-    const merged=[...pool,...staticPool.filter(v=>!pool.some(p=>p.videoId===v.videoId))];
-    if(merged.length>=count)return selectMany(clientId,merged,count,cfg);
-    const stale=await loadCache(cfg,true);
-    const staleMerged=[...stale,...staticPool.filter(v=>!stale.some(p=>p.videoId===v.videoId))];
-    if(staleMerged.length>=count)return selectMany(clientId,staleMerged,count,cfg);
-    try{
-      const discovered=await discoverAndCache(cfg);
-      if(discovered.length)return selectMany(clientId,[...discovered,...staticPool.filter(v=>!discovered.some(p=>p.videoId===v.videoId))],count,cfg);
-    }catch(error){
-      // Keep task start independent from YouTube API quota, search availability,
-      // or embed restrictions. Prefer already cached/verified Hollywood videos,
-      // then add only openly licensed direct-stream fallbacks hosted by Blender.
-      const fallback=await loadCache(cfg,true).catch(()=>[]);
-      const licensed=openLicensedFallback(clientId,OPEN_LICENSED_VIDEO_FALLBACKS.length);
-      const fallbackPool=[
-        ...fallback,
-        ...staticPool.filter(v=>!fallback.some(p=>p.videoId===v.videoId)),
-        ...licensed.filter(v=>!fallback.some(p=>p.videoId===v.videoId)&&!staticPool.some(p=>p.videoId===v.videoId))
-      ];
-      if(fallbackPool.length)return selectMany(clientId,fallbackPool,count,cfg);
-    }
-    // Last-resort mixed pool: cached/verified YouTube trailers plus licensed
-    // native MP4 sources. The client already supports provider="direct".
-    return selectMany(clientId,[
-      ...staticPool,
-      ...openLicensedFallback(clientId,OPEN_LICENSED_VIDEO_FALLBACKS.length)
-        .filter(v=>!staticPool.some(p=>p.videoId===v.videoId))
-    ],count,cfg);
-  }
-  return openLicensedFallback(clientId,count);
+  return directOnlySelection(clientId,count);
 }
 export async function getTrendingVideoForClient(clientId:string){return (await getTrendingVideosForClient(clientId,1))[0];}
-export async function getAlternativeVideoForTask(clientId:string,movieTitle:string|null,excludeVideoId:string|null){
-  const cfg=await config();
-  // A failed YouTube playback should switch providers instead of repeatedly
-  // cycling through other cached YouTube IDs. If a direct stream fails, the
-  // normal cached-video path below can switch back to YouTube.
-  if(excludeVideoId&&!/^https?:\/\//i.test(excludeVideoId)){
-    const licensed=openLicensedFallback(clientId,OPEN_LICENSED_VIDEO_FALLBACKS.length).filter(v=>v.videoId!==excludeVideoId);
-    if(licensed.length)return licensed[Math.floor(Math.random()*licensed.length)];
-  }
-  if(cfg.enabled){
-    await ensureVerifiedHollywoodCache();
-    const pool=await loadCache(cfg);
-    const sameMovie=pool.filter(v=>(!movieTitle||v.movieTitle===movieTitle)&&v.videoId!==excludeVideoId);
-    if(sameMovie.length)return (await selectMany(clientId,sameMovie,1,cfg))[0];
-    const fallback=pool.filter(v=>v.videoId!==excludeVideoId);
-    if(fallback.length)return (await selectMany(clientId,fallback,1,cfg))[0];
-  }
-  const pool=openLicensedFallback(clientId,OPEN_LICENSED_VIDEO_FALLBACKS.length).filter(v=>v.videoId!==excludeVideoId);
-  return pool[Math.floor(Math.random()*pool.length)]||OPEN_LICENSED_VIDEO_FALLBACKS[0];
+export async function getAlternativeVideoForTask(clientId:string,_movieTitle:string|null,excludeVideoId:string|null){
+  void clientId;
+  const pool=OPEN_LICENSED_VIDEO_FALLBACKS.filter(v=>v.videoId!==excludeVideoId);
+  const choices=pool.length?pool:OPEN_LICENSED_VIDEO_FALLBACKS;
+  const index=Math.floor(Math.random()*choices.length);
+  return {...choices[index]};
 }
 export async function getCurrentTrailerCandidates(){
-  const cfg=await config();
-  const licensed=openLicensedFallback("movie-preview",OPEN_LICENSED_VIDEO_FALLBACKS.length);
-  if(!cfg.enabled)return shuffleTrending(licensed).slice(0,20);
-  await ensureVerifiedHollywoodCache();
-  const cached=await loadCache(cfg,true).catch(()=>[]);
-  const staticPool=verifiedStaticPool();
-  // Mix a small, explicitly licensed direct-stream set into Trending Now so
-  // the Client exercises both native MP4 and YouTube playback paths. These
-  // Blender Foundation films are fallback content, not copied copyrighted
-  // Hollywood titles.
-  const merged=[
-    ...cached,
-    ...staticPool.filter(v=>!cached.some(c=>c.videoId===v.videoId)),
-    ...licensed.filter(v=>!cached.some(c=>c.videoId===v.videoId)&&!staticPool.some(c=>c.videoId===v.videoId))
-  ];
-  return shuffleTrending(merged).slice(0,20);
+  // Render cards immediately from the openly licensed, direct-stream catalog.
+  // No upstream search or third-party movie API is required.
+  return [...OPEN_LICENSED_VIDEO_FALLBACKS].map(v=>({...v}));
 }
-export async function runYouTubeDiagnostic(){return {skipped:true,reason:"manual-only diagnostic; production startup does not call search.list"};}
+export async function runYouTubeDiagnostic(){
+  return {skipped:true,reason:"YouTube is disabled for all live MOJO video flows; only licensed direct streams are used."};
+}
 export async function warmTrendingVideoCache(){
-  const cfg=await config();if(!cfg.enabled)return {enabled:false,count:0};
-  const pool=await loadCache(cfg,true);
-  console.log("[trending] cache warmup",{count:pool.length});
-  return {enabled:true,count:pool.length};
+  return {enabled:true,provider:"direct",count:OPEN_LICENSED_VIDEO_FALLBACKS.length};
 }
 export async function trendingConfig(){
-  const cfg=await config();
-  return {enabled:cfg.enabled,provider:"YouTube",regionCode:cfg.regionCode,relevanceLanguage:cfg.relevanceLanguage,cacheTtlMinutes:cfg.cacheTtlMs/60000,poolSize:cfg.poolSize,recentHistorySize:cfg.recentHistorySize,repeatCooldownHours:cfg.repeatCooldownHours,minDurationSeconds:cfg.minDurationSeconds,maxDurationSeconds:cfg.maxDurationSeconds,freshnessDays:cfg.freshnessDays,maxCandidates:cfg.maxCandidates,refreshIntervalMinutes:cfg.refreshIntervalMs/60000,discoveryCooldownMinutes:cfg.discoveryCooldownMs/60000,discoveryMaxAttempts:cfg.discoveryMaxAttempts};
+  return {enabled:true,provider:"direct",regionCode:"GLOBAL",relevanceLanguage:"en",cacheTtlMinutes:0,poolSize:OPEN_LICENSED_VIDEO_FALLBACKS.length,recentHistorySize:0,repeatCooldownHours:0,minDurationSeconds:0,maxDurationSeconds:0,freshnessDays:0,maxCandidates:OPEN_LICENSED_VIDEO_FALLBACKS.length,refreshIntervalMinutes:0,discoveryCooldownMinutes:0,discoveryMaxAttempts:0};
 }
