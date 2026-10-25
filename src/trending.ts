@@ -487,7 +487,15 @@ export async function getTrendingVideosForClient(clientId:string,count:number){
 }
 export async function getTrendingVideoForClient(clientId:string){return (await getTrendingVideosForClient(clientId,1))[0];}
 export async function getAlternativeVideoForTask(clientId:string,movieTitle:string|null,excludeVideoId:string|null){
-  const cfg=await config();if(cfg.enabled){
+  const cfg=await config();
+  // A failed YouTube playback should switch providers instead of repeatedly
+  // cycling through other cached YouTube IDs. If a direct stream fails, the
+  // normal cached-video path below can switch back to YouTube.
+  if(excludeVideoId&&!/^https?:\/\//i.test(excludeVideoId)){
+    const licensed=openLicensedFallback(clientId,OPEN_LICENSED_VIDEO_FALLBACKS.length).filter(v=>v.videoId!==excludeVideoId);
+    if(licensed.length)return licensed[Math.floor(Math.random()*licensed.length)];
+  }
+  if(cfg.enabled){
     await ensureVerifiedHollywoodCache();
     const pool=await loadCache(cfg);
     const sameMovie=pool.filter(v=>(!movieTitle||v.movieTitle===movieTitle)&&v.videoId!==excludeVideoId);
@@ -495,7 +503,7 @@ export async function getAlternativeVideoForTask(clientId:string,movieTitle:stri
     const fallback=pool.filter(v=>v.videoId!==excludeVideoId);
     if(fallback.length)return (await selectMany(clientId,fallback,1,cfg))[0];
   }
-  const pool=openLicensedFallback(clientId,6).filter(v=>v.videoId!==excludeVideoId);
+  const pool=openLicensedFallback(clientId,OPEN_LICENSED_VIDEO_FALLBACKS.length).filter(v=>v.videoId!==excludeVideoId);
   return pool[Math.floor(Math.random()*pool.length)]||OPEN_LICENSED_VIDEO_FALLBACKS[0];
 }
 export async function getCurrentTrailerCandidates(){
