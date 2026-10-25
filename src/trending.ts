@@ -499,11 +499,21 @@ export async function getAlternativeVideoForTask(clientId:string,movieTitle:stri
   return pool[Math.floor(Math.random()*pool.length)]||OPEN_LICENSED_VIDEO_FALLBACKS[0];
 }
 export async function getCurrentTrailerCandidates(){
-  const cfg=await config();if(!cfg.enabled)return [];
+  const cfg=await config();
+  const licensed=openLicensedFallback("movie-preview",OPEN_LICENSED_VIDEO_FALLBACKS.length);
+  if(!cfg.enabled)return shuffleTrending(licensed).slice(0,20);
   await ensureVerifiedHollywoodCache();
-  const cached=await loadCache(cfg,true);
+  const cached=await loadCache(cfg,true).catch(()=>[]);
   const staticPool=verifiedStaticPool();
-  const merged=[...cached,...staticPool.filter(v=>!cached.some(c=>c.videoId===v.videoId))];
+  // Mix a small, explicitly licensed direct-stream set into Trending Now so
+  // the Client exercises both native MP4 and YouTube playback paths. These
+  // Blender Foundation films are fallback content, not copied copyrighted
+  // Hollywood titles.
+  const merged=[
+    ...cached,
+    ...staticPool.filter(v=>!cached.some(c=>c.videoId===v.videoId)),
+    ...licensed.filter(v=>!cached.some(c=>c.videoId===v.videoId)&&!staticPool.some(c=>c.videoId===v.videoId))
+  ];
   return shuffleTrending(merged).slice(0,20);
 }
 export async function runYouTubeDiagnostic(){return {skipped:true,reason:"manual-only diagnostic; production startup does not call search.list"};}
