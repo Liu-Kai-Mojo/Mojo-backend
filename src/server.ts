@@ -439,6 +439,13 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       preparedVideoTaskCount=preflightVipRule.taskCount;
       preparedVideos=await getTrendingVideosForClient(clientId,preparedVideoTaskCount);
     }
+    // Run uniqueness checks before the serializable transaction; doing them
+    // sequentially through the global Prisma client while the transaction holds
+    // a connection can make Starting feel stalled on a busy database.
+    const preparedTaskIds=preparedVideoTaskCount>0
+      ?await Promise.all(Array.from({length:preparedVideoTaskCount},()=>uniqueTaskId()))
+      :[];
+    const preparedSessionId=preparedVideoTaskCount>0?await uniqueTaskSessionId():null;
     const result:any=await prisma.$transaction(async tx=>{
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clientId}))`;
       if(idempotencyKey){const prior=await tx.task.findUnique({where:{idempotencyKey},include:{session:true}});if(prior){if(prior.clientId!==clientId)throw Object.assign(new Error("This idempotency key was already used for another account."),{code:"IDEMPOTENCY_CONFLICT"});if(!prior.session)throw Object.assign(new Error("The existing task session could not be found."),{code:"IDEMPOTENCY_CONFLICT"});return {session:prior.session,task:prior,idempotent:true};}}
@@ -486,7 +493,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
         throw Object.assign(new Error("Task video preparation changed while Starting was in progress. Please try again."),{code:"VIDEO_POOL_STALE"});
       }
       const videos=preparedVideos.slice(0,taskCount);
-      const sessionId=await uniqueTaskSessionId();const latestTask=await tx.task.findFirst({where:{clientId},select:{sequence:true},orderBy:{sequence:"desc"}});const sequenceStart=Math.max(config.cycleStartSequence,(latestTask?.sequence??0)+1);
+      const sessionId=preparedSessionId||await uniqueTaskSessionId();const latestTask=await tx.task.findFirst({where:{clientId},select:{sequence:true},orderBy:{sequence:"desc"}});const sequenceStart=Math.max(config.cycleStartSequence,(latestTask?.sequence??0)+1);
       const assignments=config.combinationTaskAssignments.filter(a=>a.round===round);const taskData:any[]=[];const amounts:number[]=[];
       for(let i=0;i<taskCount;i++){
         const localSequence=i+1;const assignment=assignments.find(a=>a.sequence===localSequence);
@@ -497,7 +504,7 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
         if(i===0&&(!amount||amount<5000))throw Object.assign(new Error("A safe task amount could not be generated from the current available balance."),{code:"TASK_AMOUNT_INVALID"});
         if(!combination&&amount>available)throw Object.assign(new Error("Your available balance is not enough to start this task."),{code:"LOW_BALANCE"});
         amounts.push(amount||0);const rateBps=combination?1500:vipRule.commissionRateBps;const commission=amount>0?Math.max(1,Math.round(amount*rateBps/10000)):0;const video=videos[i];
-        taskData.push({id:await uniqueTaskId(),clientId,sessionId,sequence:sequenceStart+i,title:normalizeMovieTitle(video.movieTitle||video.title),taskType:combination?"COMBINATION":"STANDARD",commissionRateBps:rateBps,amountCents:amount,commissionCents:commission,ticketCount:calculateTicketCount(amount),reservedAmountCents:0,isLucky:combination,videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:i===0&&idempotencyKey?idempotencyKey:null});
+        taskData.push({id:preparedTaskIds[i]||await uniqueTaskId(),clientId,sessionId,sequence:sequenceStart+i,title:normalizeMovieTitle(video.movieTitle||video.title),taskType:combination?"COMBINATION":"STANDARD",commissionRateBps:rateBps,amountCents:amount,commissionCents:commission,ticketCount:calculateTicketCount(amount),reservedAmountCents:0,isLucky:combination,videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:i===0&&idempotencyKey?idempotencyKey:null});
       }
       const firstData=taskData[0];const reserveFirst=firstData.amountCents<=available;
       if(firstData.taskType==="STANDARD"&&!reserveFirst)throw Object.assign(new Error("Your available balance is not enough to start this task."),{code:"LOW_BALANCE"});
