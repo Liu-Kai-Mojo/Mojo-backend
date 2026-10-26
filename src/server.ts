@@ -525,20 +525,9 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
   if(!task)return res.status(404).json({error:"Task not found."});
   
 
-  // Some previously generated sessions already have the movie/video assigned
-  // but have not been reserved/revealed yet. Reveal must therefore be the
-  // authoritative reserve + reveal operation, not just a metadata lookup.
-  let preparedVideo:any=null;
-  // Existing pending tasks may still contain a legacy YouTube video ID. Replace
-  // it with a licensed direct MP4 before returning any task to the Client.
-  if(!task.videoId||String(task.videoProvider||"")!=="direct"){
-    try{
-      preparedVideo=await getAlternativeVideoForTask(clientId,task.movieTitle||null,task.videoId||null);
-    }catch(error){
-      const message=error instanceof Error?error.message:"Licensed videos are temporarily unavailable.";
-      return res.status(503).json({error:message,code:"TRENDING_VIDEO_UNAVAILABLE"});
-    }
-  }
+  // Tasks no longer depend on external movie/video providers. Keep reveal
+  // deterministic so provider outages cannot block a valid task workflow.
+  const preparedVideo:any=null;
 
   try{
     const result:any=await prisma.$transaction(async tx=>{
@@ -690,8 +679,7 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
       if(fresh.status!==TaskStatus.PENDING){const user=await tx.user.findUniqueOrThrow({where:{id:clientId}});return {user,task:fresh,already:true};}
       const first=fresh.sessionId?await tx.task.findFirst({where:{sessionId:fresh.sessionId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}}):await tx.task.findFirst({where:{clientId,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}});
       if(!first||first.id!==fresh.id)throw Object.assign(new Error("Please finish your current task before continuing."),{code:"TASK_ORDER_CONFLICT"});
-      if(!fresh.revealedAt||!fresh.videoId)throw Object.assign(new Error("This task is not currently playable."),{code:"NO_PLAYABLE_VIDEO"});
-      const requiredMs=Math.round(Math.max(0,Number(fresh.requiredWatchSeconds||2.5))*1000);if(requiredMs>0&&Number(fresh.watchAccumulatedMs||0)<requiredMs)throw Object.assign(new Error("Please watch the trailer for the required time before submitting this task."),{code:"WATCH_TIME_INCOMPLETE"});
+      if(!fresh.revealedAt)throw Object.assign(new Error("Open this task before confirming it."),{code:"TASK_NOT_REVEALED"});
       const before=await tx.user.findUniqueOrThrow({where:{id:clientId},select:{balanceCents:true,frozenCents:true}});const reserved=Math.max(0,Number(fresh.reservedAmountCents||0));
       if(reserved>0&&(before.frozenCents??0)<reserved)throw Object.assign(new Error("Task reservation is inconsistent. Please contact support."),{code:"RESERVATION_MISMATCH"});
       const commission=Math.max(0,Number(fresh.commissionCents||0));const releaseAmount=reserved;
