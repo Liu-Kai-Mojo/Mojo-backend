@@ -10,7 +10,7 @@ import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueWalletRequestId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
-import { getTrendingVideoForClient, getTrendingVideosForClient, getAlternativeVideoForTask, getCurrentTrailerCandidates, trendingConfig, normalizeMovieTitle } from "./trending.js";
+import { getCurrentTrailerCandidates, trendingConfig, normalizeMovieTitle } from "./trending.js";
 import { combinationFundingShortfallCents, isBonusAcknowledgedForContent, isProcessingTask } from "./taskEngineRules.js";
 
 const app=express();
@@ -213,14 +213,6 @@ async function saveTaskManagementConfig(db:any,clientId:string,config:TaskManage
   await db.setting.upsert({where:{key:taskConfigKey(clientId)},create:{id:await uniqueSettingId(),key:taskConfigKey(clientId),value:JSON.stringify(config)},update:{value:JSON.stringify(config)}});
   await db.setting.upsert({where:{key:taskCycleKey(clientId)},create:{id:await uniqueSettingId(),key:taskCycleKey(clientId),value:String(config.cycleStartSequence)},update:{value:String(config.cycleStartSequence)}});
 }
-function requiredWatchSeconds(durationSeconds:number){const configured=Number(process.env.TASK_REQUIRED_WATCH_SECONDS||2.5);const target=Number.isFinite(configured)&&configured>0?configured:2.5;return durationSeconds>0?Math.min(target,durationSeconds):target;}
-async function taskPriceConfig(){
-  const keys=["task_price_min_percent","task_price_max_percent","task_price_min_absolute_cents","task_price_max_absolute_cents","task_price_min_remaining_balance_cents"];
-  const rows=await prisma.setting.findMany({where:{key:{in:keys}}});
-  const values=new Map(rows.map(r=>[r.key,Number(r.value)]));
-  const num=(key:string,fallback:number)=>{const db=values.get(key);const envKey=key.toUpperCase();const env=Number(process.env[envKey]);return Number.isFinite(db??NaN)?Number(db):Number.isFinite(env)?env:fallback;};
-  return {minPercent:Math.max(90,num("task_price_min_percent",90)),maxPercent:Math.min(100,Math.max(90,num("task_price_max_percent",100))),minAbsoluteCents:Math.max(5000,Math.round(num("task_price_min_absolute_cents",5000))),maxAbsoluteCents:Math.max(5000,Math.round(num("task_price_max_absolute_cents",100000000))),minRemainingBalanceCents:Math.max(0,Math.round(num("task_price_min_remaining_balance_cents",0)))};
-}
 function secureRandomCents(min:number,max:number){
   if(max<=min)return min;
   return min+randomInt(max-min+1);
@@ -366,7 +358,6 @@ app.post("/api/client/bonus-history/:bonusId/confirm",auth([Role.CLIENT]),asyncR
   await audit(clientId,clientId,"CLIENT_BONUS_CONFIRMED",{bonusId});
   res.json({success:true,bonus:updated.find((entry:any)=>String(entry.id)===bonusId),bonusHistory:updated});
 }));
-app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{const trailers=await getCurrentTrailerCandidates();res.json({movies:trailers.map(v=>({provider:v.provider,title:normalizeMovieTitle(v.movieTitle||v.title),movieTitle:normalizeMovieTitle(v.movieTitle||v.title),videoId:v.videoId,posterUrl:v.moviePosterUrl,thumbnailUrl:v.thumbnailUrl,channelTitle:v.channelTitle,publishedAt:v.publishedAt,durationSeconds:v.durationSeconds,viewCount:v.viewCount}))});}));
 app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const userId=res.locals.auth.sub;const config=await getTaskManagementConfig(userId);await reconcileLegacyTaskSettlementBalance(userId);
   const session=await prisma.taskSession.findFirst({where:{clientId:userId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
