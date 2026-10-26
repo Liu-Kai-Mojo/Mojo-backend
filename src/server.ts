@@ -625,7 +625,7 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
       const user=await tx.user.update({where:{id:clientId},data:{...(releaseAmount>0?{frozenCents:{decrement:releaseAmount}}:{}),balanceCents:{increment:commission}}});
       const completed=await tx.task.update({where:{id},data:{status:TaskStatus.COMPLETED,completedAt:new Date(),settledAt:new Date(),reservedAmountCents:0,rating:d.rating??fresh.rating}});
       if(fresh.sessionId){const pendingCount=await tx.task.count({where:{sessionId:fresh.sessionId,status:TaskStatus.PENDING}});await tx.taskSession.update({where:{id:fresh.sessionId},data:{completedTaskCount:{increment:1},reservedAmountCents:releaseAmount>0?{decrement:releaseAmount}:undefined,status:pendingCount<=1?"COMPLETED":"ACTIVE",settledAmountCents:{increment:releaseAmount+commission}}});}
-      if(commission>0)await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(),userId:clientId,amountCents:commission,type:"TASK_COMMISSION",note:"Task #"+fresh.sequence+" commission"}});
+      if(commission>0)await tx.walletTransaction.create({data:{id:await uniqueWalletTransactionId(tx),userId:clientId,amountCents:commission,type:"TASK_COMMISSION",note:"Task #"+fresh.sequence+" commission"}});
       return {user,task:completed,already:false};
     },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
     if(result.already)return res.json({success:true,user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task already completed."});
