@@ -287,13 +287,13 @@ function taskPublic(t:any,includeValues=false){
   // Normalize those values before building an iframe URL; encoding a full URL
   // as the ID produces a valid-looking but unplayable embed.
   const rawVideoId=provider==="youtube"
-    ? (storedVideoId.match(/(?:youtu\\.be\\/|youtube(?:-nocookie)?\\.com\\/(?:embed\\/|shorts\\/|live\\/|watch\\?(?:[^#]*&)?v=))([A-Za-z0-9_-]{11})/)?.[1]
+    ? (storedVideoId.match(/(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:embed\/|shorts\/|live\/|watch\\?(?:[^#]*&)?v=))([A-Za-z0-9_-]{11})/)?.[1]
       || (/^[A-Za-z0-9_-]{11}$/.test(storedVideoId)?storedVideoId:""))
     :storedVideoId;
   const videoSource=hasAssignedVideo
     ? provider==="youtube" && rawVideoId
       ?"https://www.youtube-nocookie.com/embed/"+rawVideoId+"?autoplay=1&mute=1&playsinline=1&controls=1&rel=0"
-      :provider==="direct" && /^https?:\\/\\//i.test(rawVideoId)
+      :provider==="direct" && /^https?:\/\//i.test(rawVideoId)
         ?rawVideoId
         :null
     :null;
