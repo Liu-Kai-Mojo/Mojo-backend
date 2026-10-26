@@ -417,14 +417,8 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
   await reconcileLegacyTaskSettlementBalance(clientId);
   const idempotencyKey=String(req.header("Idempotency-Key")||"").trim();
   try{
-    /*
-     * Never perform YouTube/network discovery inside the Prisma transaction.
-     * Prisma's default interactive-transaction timeout is short; remote search,
-     * poster checks and cache validation can outlive it and roll back task start.
-     * Preflight only when there is no task to resume. The transaction below
-     * still re-checks the active session and balance under the client lock.
-     */
-    let preparedVideos:any[]|null=null;
+    // Prepare only local task identifiers before the transaction. Task creation
+    // must not depend on an external movie/video provider being available.
     let preparedVideoTaskCount=0;
     const preflightSession=await prisma.taskSession.findFirst({where:{clientId,status:"ACTIVE"},orderBy:{createdAt:"desc"}});
     const preflightPending=preflightSession?await prisma.task.findFirst({where:{sessionId:preflightSession.id,status:TaskStatus.PENDING},orderBy:{sequence:"asc"}}):null;
@@ -437,7 +431,6 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
         preflightVipRule={taskCount:clampTaskCount(Number(parsed.taskCount??preflightFallback.taskCount)),commissionRateBps:clampRateBps(Number(parsed.commissionRateBps??preflightFallback.commissionRateBps))};
       }catch{}
       preparedVideoTaskCount=preflightVipRule.taskCount;
-      preparedVideos=await getTrendingVideosForClient(clientId,preparedVideoTaskCount);
     }
     // Run uniqueness checks before the serializable transaction; doing them
     // sequentially through the global Prisma client while the transaction holds
@@ -489,10 +482,9 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
       // A concurrent admin config change can alter the VIP task count after
       // preflight. Abort cleanly and let the client retry rather than doing
       // slow external requests while holding a database transaction open.
-      if(!preparedVideos||preparedVideoTaskCount!==taskCount||preparedVideos.length<taskCount){
-        throw Object.assign(new Error("Task video preparation changed while Starting was in progress. Please try again."),{code:"VIDEO_POOL_STALE"});
+      if(preparedVideoTaskCount!==taskCount){
+        throw Object.assign(new Error("Task settings changed while Starting was in progress. Please try again."),{code:"TASK_CONFIG_STALE"});
       }
-      const videos=preparedVideos.slice(0,taskCount);
       const sessionId=preparedSessionId||await uniqueTaskSessionId();const latestTask=await tx.task.findFirst({where:{clientId},select:{sequence:true},orderBy:{sequence:"desc"}});const sequenceStart=Math.max(config.cycleStartSequence,(latestTask?.sequence??0)+1);
       const assignments=config.combinationTaskAssignments.filter(a=>a.round===round);const taskData:any[]=[];const amounts:number[]=[];
       for(let i=0;i<taskCount;i++){
@@ -503,8 +495,8 @@ app.post(["/api/client/tasks","/api/client/tasks/start"],auth([Role.CLIENT]),asy
         if(combination&&(!amount||amount<5000))throw Object.assign(new Error("A safe combination task amount could not be generated."),{code:"TASK_AMOUNT_INVALID"});
         if(i===0&&(!amount||amount<5000))throw Object.assign(new Error("A safe task amount could not be generated from the current available balance."),{code:"TASK_AMOUNT_INVALID"});
         if(!combination&&amount>available)throw Object.assign(new Error("Your available balance is not enough to start this task."),{code:"LOW_BALANCE"});
-        amounts.push(amount||0);const rateBps=combination?1500:vipRule.commissionRateBps;const commission=amount>0?Math.max(1,Math.round(amount*rateBps/10000)):0;const video=videos[i];
-        taskData.push({id:preparedTaskIds[i]||await uniqueTaskId(),clientId,sessionId,sequence:sequenceStart+i,title:normalizeMovieTitle(video.movieTitle||video.title),taskType:combination?"COMBINATION":"STANDARD",commissionRateBps:rateBps,amountCents:amount,commissionCents:commission,ticketCount:calculateTicketCount(amount),reservedAmountCents:0,isLucky:combination,videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,requiredWatchSeconds:requiredWatchSeconds(video.durationSeconds),videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",idempotencyKey:i===0&&idempotencyKey?idempotencyKey:null});
+        amounts.push(amount||0);const rateBps=combination?1500:vipRule.commissionRateBps;const commission=amount>0?Math.max(1,Math.round(amount*rateBps/10000)):0;
+        taskData.push({id:preparedTaskIds[i]||await uniqueTaskId(),clientId,sessionId,sequence:sequenceStart+i,title:combination?"Combination Task "+(sequenceStart+i):"Task "+(sequenceStart+i),taskType:combination?"COMBINATION":"STANDARD",commissionRateBps:rateBps,amountCents:amount,commissionCents:commission,ticketCount:calculateTicketCount(amount),reservedAmountCents:0,isLucky:combination,requiredWatchSeconds:0,idempotencyKey:i===0&&idempotencyKey?idempotencyKey:null});
       }
       const firstData=taskData[0];const reserveFirst=firstData.amountCents<=available;
       if(firstData.taskType==="STANDARD"&&!reserveFirst)throw Object.assign(new Error("Your available balance is not enough to start this task."),{code:"LOW_BALANCE"});
@@ -527,7 +519,6 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
 
   // Tasks no longer depend on external movie/video providers. Keep reveal
   // deterministic so provider outages cannot block a valid task workflow.
-  const preparedVideo:any=null;
 
   try{
     const result:any=await prisma.$transaction(async tx=>{
@@ -574,7 +565,7 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:amount}}});
       const updated=await tx.task.update({where:{id},data:{
         amountCents:amount,commissionCents:commission,commissionRateBps:rateBps,ticketCount,reservedAmountCents:amount,
-        revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null,...videoData
+        revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null
       }});
       await tx.taskSession.update({where:{id:active.id},data:{
         reservedAmountCents:{increment:amount},
