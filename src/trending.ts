@@ -261,43 +261,12 @@ async function validatePosterUrl(url:string){
     return {valid:true,width:dimensions.width,height:dimensions.height};
   }catch{return {valid:false,reason:"FETCH_FAILED"};}
 }
-async function resolveTmdbPoster(movie:EligibleMovie){
-  const token=String(process.env.TMDB_API_READ_TOKEN||"").trim();
-  if(!token)return null;
-  try{
-    const url=new URL("https://api.themoviedb.org/3/search/movie");
-    url.searchParams.set("query",movie.title);
-    url.searchParams.set("include_adult","false");
-    url.searchParams.set("language","en-US");
-    url.searchParams.set("page","1");
-    if(movie.year>0)url.searchParams.set("primary_release_year",String(movie.year));
-    const response=await fetch(url,{signal:AbortSignal.timeout(7000),headers:{Accept:"application/json",Authorization:"Bearer "+token}});
-    if(!response.ok)return null;
-    const payload:any=await response.json();
-    const results=Array.isArray(payload?.results)?payload.results:[];
-    const normalized=movie.title.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
-    const match=results.find((item:any)=>{
-      const title=String(item?.title||item?.original_title||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
-      const year=Number(String(item?.release_date||"").slice(0,4));
-      return title===normalized&&(!movie.year||!year||year===movie.year)&&String(item?.poster_path||"").trim();
-    })||results.find((item:any)=>String(item?.poster_path||"").trim());
-    if(!match?.poster_path)return null;
-    const poster="https://image.tmdb.org/t/p/w780"+String(match.poster_path);
-    const validation=await validatePosterUrl(poster);
-    if(!validation.valid)return null;
-    console.log("[poster-validation]",{operation:"tmdb-resolve",movieId:movie.id,movieTitle:movie.title,status:"valid",width:validation.width,height:validation.height});
-    return poster;
-  }catch{return null;}
-}
 async function ensureMoviePoster(movie:EligibleMovie,existing:string){
   const current=String(existing||"").trim();
   const currentValidation=await validatePosterUrl(current);
   if(currentValidation.valid)return current;
-  const repaired=await resolveTmdbPoster(movie);
-  if(repaired){
-    await prisma.movie.update({where:{id:movie.id},data:{posterUrl:repaired}}).catch(()=>{});
-    return repaired;
-  }
+  // Do not depend on TMDB or a second movie catalog. If the configured poster
+  // is unavailable, the verified YouTube thumbnail is used by the cache path.
   return null;
 }
 async function validateCachedVideo(row:any){
