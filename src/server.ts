@@ -542,20 +542,6 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
       if(String(current.status)!==TaskStatus.PENDING)return {task:current};
        const existingReservation=Math.max(0,Number(current.reservedAmountCents||0));
        if(existingReservation>0){
-         if(preparedVideo&&(!current.videoId||String(current.videoProvider||"")!=="direct")){
-           // Preserve the financial reservation and task amount while resetting
-           // watch progress because it belongs to the previous video.
-           const migrated=await tx.task.update({where:{id:current.id},data:{
-             videoProvider:"direct",videoId:preparedVideo.videoId,videoTitle:preparedVideo.title,movieTitle:preparedVideo.movieTitle,
-             moviePosterUrl:preparedVideo.moviePosterUrl,movieReleaseDate:preparedVideo.movieReleaseDate?new Date(preparedVideo.movieReleaseDate):null,
-             videoChannelId:preparedVideo.channelId||null,videoChannelTitle:preparedVideo.channelTitle,videoThumbnailUrl:preparedVideo.thumbnailUrl,
-             videoDurationSeconds:preparedVideo.durationSeconds,videoPublishedAt:preparedVideo.publishedAt?new Date(preparedVideo.publishedAt):null,
-             videoCategoryId:preparedVideo.categoryId,videoViewCount:preparedVideo.viewCount??0,videoLikeCount:preparedVideo.likeCount??0,
-             videoCommentCount:preparedVideo.commentCount??0,videoLiveBroadcastContent:preparedVideo.liveBroadcastContent||"none",
-             revealedAt:current.revealedAt||new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null
-           }});
-           return {task:migrated};
-         }
          if(!current.revealedAt){
            const repaired=await tx.task.update({where:{id:current.id},data:{revealedAt:new Date(),watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null}});
            return {task:repaired};
@@ -584,11 +570,6 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
        const existingTicketRows=await tx.task.findMany({where:{sessionId:active.id,id:{not:id}},select:{ticketCount:true}});
        const usedTicketCounts=new Set<number>(existingTicketRows.map(row=>Math.max(1,Number(row.ticketCount||0))).filter(n=>n>1));
        const ticketCount=nextUniqueTicketCount(amount,usedTicketCounts);
-      const videoData=preparedVideo?{
-        videoProvider:preparedVideo.provider,videoId:preparedVideo.videoId,videoTitle:preparedVideo.title,movieTitle:preparedVideo.movieTitle,moviePosterUrl:preparedVideo.moviePosterUrl,movieReleaseDate:preparedVideo.movieReleaseDate?new Date(preparedVideo.movieReleaseDate):null,videoChannelId:preparedVideo.channelId||null,videoChannelTitle:preparedVideo.channelTitle,
-        videoThumbnailUrl:preparedVideo.thumbnailUrl,videoDurationSeconds:preparedVideo.durationSeconds,videoPublishedAt:preparedVideo.publishedAt?new Date(preparedVideo.publishedAt):null,videoCategoryId:preparedVideo.categoryId,
-        videoViewCount:preparedVideo.viewCount??0,videoLikeCount:preparedVideo.likeCount??0,videoCommentCount:preparedVideo.commentCount??0,videoLiveBroadcastContent:preparedVideo.liveBroadcastContent||"none"
-      }:{};
 
       await tx.user.update({where:{id:clientId},data:{frozenCents:{increment:amount}}});
       const updated=await tx.task.update({where:{id},data:{
@@ -611,62 +592,6 @@ app.post("/api/client/tasks/:id/reveal",auth([Role.CLIENT]),asyncRoute(async(req
     console.error("[task-reveal]",{operation:"task-reveal",code,error:error instanceof Error?error.message:String(error)});
     return res.status(500).json({success:false,error:"We couldn't prepare this task right now. Please try again shortly.",code});
   }
-}));
-app.post("/api/client/tasks/:id/video-retry",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
-  const id=param(req,"id");const clientId=res.locals.auth.sub;
-  const task=await prisma.task.findFirst({where:{id,clientId,status:TaskStatus.PENDING}});
-  if(!task)return res.status(404).json({error:"Task not found."});
-  if(!task.revealedAt)return res.status(400).json({error:"Open the task details first."});
-  try{
-    const video=await getTrendingVideoForClient(clientId);
-    const updated=await prisma.task.update({where:{id},data:{
-      videoProvider:video.provider,videoId:video.videoId,videoTitle:video.title,movieTitle:video.movieTitle,moviePosterUrl:video.moviePosterUrl,movieReleaseDate:video.movieReleaseDate?new Date(video.movieReleaseDate):null,videoChannelId:video.channelId||null,videoChannelTitle:video.channelTitle,
-      videoThumbnailUrl:video.thumbnailUrl,videoDurationSeconds:video.durationSeconds,
-      videoPublishedAt:video.publishedAt?new Date(video.publishedAt):null,videoCategoryId:video.categoryId,
-      videoViewCount:video.viewCount??0,videoLikeCount:video.likeCount??0,videoCommentCount:video.commentCount??0,videoLiveBroadcastContent:video.liveBroadcastContent||"none",watchAccumulatedMs:0,watchLastPositionSeconds:0,watchHeartbeatAt:null
-    }});
-    res.json({task:taskPublic(updated,true)});
-  }catch{return res.status(503).json({error:"This video isn't available right now. We're loading another one.",code:"TRENDING_VIDEO_UNAVAILABLE"});}
-}));
-app.post("/api/client/tasks/:id/watch",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
-  const id=param(req,"id");const clientId=res.locals.auth.sub;
-  
-  const d=z.object({
-    playing:z.boolean(),
-    positionSeconds:z.coerce.number().finite().min(0).max(86400).optional(),
-    durationSeconds:z.coerce.number().finite().min(0).max(86400).optional()
-  }).parse(req.body||{});
-  const task=await prisma.task.findFirst({where:{id,clientId}});
-  if(!task)return res.status(404).json({error:"Task not found."});
-  // A client can keep a modal open briefly after the task is completed elsewhere.
-  // Treat that stale heartbeat as a terminal no-op instead of generating a 404
-  // loop in the browser console.
-  if(String(task.status)!==TaskStatus.PENDING){
-    return res.json({success:true,terminal:true,watchSeconds:Math.max(0,Number(task.watchAccumulatedMs||0))/1000,requiredWatchSeconds:task.requiredWatchSeconds,positionSeconds:Math.max(0,Number(task.watchLastPositionSeconds||0))});
-  }
-  if(!task.revealedAt||!task.videoId)return res.status(409).json({error:"Task video is not ready yet.",code:"TASK_VIDEO_NOT_READY"});
-  const now=new Date();const previousHeartbeat=task.watchHeartbeatAt;const previousPosition=Math.max(0,Number(task.watchLastPositionSeconds||0));
-  const reportedPosition=d.positionSeconds===undefined?previousPosition:d.positionSeconds;
-  const knownDuration=Math.max(0,Number(task.videoDurationSeconds||0));
-  const reportedDuration=d.durationSeconds&&d.durationSeconds>0?d.durationSeconds:knownDuration;
-  const boundedPosition=reportedDuration>0?Math.min(reportedPosition,reportedDuration):reportedPosition;
-  let accumulated=Math.max(0,Number(task.watchAccumulatedMs||0));
-  if(previousHeartbeat){
-    const wallDeltaSeconds=Math.max(0,Math.min(3.5,(now.getTime()-previousHeartbeat.getTime())/1000));
-    const positionDelta=boundedPosition-previousPosition;
-    // Only credit forward playback that is physically plausible for the elapsed
-    // server time. A large jump (seek) updates the baseline but contributes no
-    // watch credit for that heartbeat. Pausing still flushes the final interval.
-    if(positionDelta>=0&&positionDelta<=wallDeltaSeconds+1.25){
-      accumulated=Math.min(600000,accumulated+Math.round(Math.min(positionDelta,wallDeltaSeconds+0.25)*1000));
-    }
-  }
-  const updated=await prisma.task.update({where:{id},data:{
-    watchAccumulatedMs:accumulated,
-    watchLastPositionSeconds:boundedPosition,
-    watchHeartbeatAt:d.playing?now:null
-  }});
-  res.json({success:true,watchSeconds:updated.watchAccumulatedMs/1000,requiredWatchSeconds:updated.requiredWatchSeconds,positionSeconds:updated.watchLastPositionSeconds});
 }));
 app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
   const id=param(req,"id");const clientId=res.locals.auth.sub;await reconcileLegacyTaskSettlementBalance(clientId);const d=z.object({rating:z.coerce.number().int().min(1).max(5).nullable().optional(),watchedSeconds:z.coerce.number().finite().min(0).optional()}).parse(req.body||{});
@@ -692,7 +617,7 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
     if(result.already)return res.json({success:true,user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task already completed."});
     await audit(clientId,clientId,"TASK_COMPLETED",{taskId:id,amountCents:result.task.amountCents,commissionCents:result.task.commissionCents,taskType:result.task.taskType});
     return res.json({user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task completed and your balance has been updated."});
-  }catch(error){const code=String((error as any)?.code||"TASK_COMPLETION_FAILED");const status=code==="NOT_FOUND"?404:code==="TASK_ORDER_CONFLICT"||code==="WATCH_TIME_INCOMPLETE"||code==="NO_PLAYABLE_VIDEO"||code==="RESERVATION_MISMATCH"?409:500;return res.status(status).json({success:false,error:error instanceof Error?error.message:"Unable to complete this task.",code});}
+  }catch(error){const code=String((error as any)?.code||"TASK_COMPLETION_FAILED");const status=code==="NOT_FOUND"?404:code==="TASK_ORDER_CONFLICT"||code==="TASK_NOT_REVEALED"||code==="RESERVATION_MISMATCH"?409:500;return res.status(status).json({success:false,error:error instanceof Error?error.message:"Unable to complete this task.",code});}
 }));
 app.get("/api/client/events",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const clientId=res.locals.auth.sub;
