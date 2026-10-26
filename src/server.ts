@@ -217,6 +217,13 @@ function secureRandomCents(min:number,max:number){
   if(max<=min)return min;
   return min+randomInt(max-min+1);
 }
+async function taskPriceConfig(){
+  const keys=["task_price_min_percent","task_price_max_percent","task_price_min_absolute_cents","task_price_max_absolute_cents","task_price_min_remaining_balance_cents"];
+  const rows=await prisma.setting.findMany({where:{key:{in:keys}}});
+  const values=new Map(rows.map(r=>[r.key,Number(r.value)]));
+  const num=(key:string,fallback:number)=>{const db=values.get(key);const envKey=key.toUpperCase();const env=Number(process.env[envKey]);return Number.isFinite(db??NaN)?Number(db):Number.isFinite(env)?env:fallback;};
+  return {minPercent:Math.max(90,num("task_price_min_percent",90)),maxPercent:Math.min(100,Math.max(90,num("task_price_max_percent",100))),minAbsoluteCents:Math.max(5000,Math.round(num("task_price_min_absolute_cents",5000))),maxAbsoluteCents:Math.max(5000,Math.round(num("task_price_max_absolute_cents",100000000))),minRemainingBalanceCents:Math.max(0,Math.round(num("task_price_min_remaining_balance_cents",0)))};
+}
 function randomTaskAmount(balanceCents:number,frozenCents=0){
   const availableBalance=Math.max(0,Math.floor(balanceCents)-Math.max(0,Math.floor(frozenCents)));
   if(availableBalance<5000)return null;
