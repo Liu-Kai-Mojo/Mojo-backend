@@ -281,22 +281,30 @@ function taskPublic(t:any,includeValues=false){
   const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title||"").trim());
   const moviePosterUrl=String(t.moviePosterUrl||t.videoThumbnailUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
-  const provider=String(t.videoProvider||"youtube");
-  const rawVideoId=String(t.videoId||"");
+  const provider=String(t.videoProvider||"youtube").toLowerCase();
+  const storedVideoId=String(t.videoId||"").trim();
+  // Older rows can contain a full YouTube URL instead of the 11-character ID.
+  // Normalize those values before building an iframe URL; encoding a full URL
+  // as the ID produces a valid-looking but unplayable embed.
+  const rawVideoId=provider==="youtube"
+    ? (storedVideoId.match(/(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:embed\/|shorts\/|live\/|watch\\?(?:[^#]*&)?v=))([A-Za-z0-9_-]{11})/)?.[1]
+      || (/^[A-Za-z0-9_-]{11}$/.test(storedVideoId)?storedVideoId:""))
+    :storedVideoId;
   const videoSource=hasAssignedVideo
-    ? provider==="youtube"
-      ?"https://www.youtube-nocookie.com/embed/"+encodeURIComponent(rawVideoId)
-      :provider==="direct"
+    ? provider==="youtube" && rawVideoId
+      ?"https://www.youtube-nocookie.com/embed/"+rawVideoId+"?autoplay=1&mute=1&playsinline=1&controls=1&rel=0"
+      :provider==="direct" && /^https?:\/\//i.test(rawVideoId)
         ?rawVideoId
         :null
     :null;
+  const playableVideo=Boolean(videoSource);
   return {
     id:t.id,sequence:t.sequence,sessionId:t.sessionId??null,sessionGeneratedTaskCount:t.session?.generatedTaskCount??null,sessionRound:t.session?.round??null,taskType:t.taskType||"STANDARD",ticketCount:Math.max(1,Number(t.ticketCount||1)),reservedAmountCents:Math.max(0,Number(t.reservedAmountCents||0)),commissionRateBps:t.commissionRateBps??0,title:t.title,status:t.status,isLucky:t.isLucky,createdAt:t.createdAt,videoId:t.videoId??null,videoTitle:t.videoTitle??null,movieTitle,moviePosterUrl,videoThumbnailUrl:t.videoThumbnailUrl??null,
     revealedAt:t.revealedAt,completedAt:t.completedAt,rating:t.rating??null,
     requiredWatchSeconds:t.requiredWatchSeconds??2.5,watchSeconds:Math.max(0,Number(t.watchAccumulatedMs||0))/1000,watchPositionSeconds:Math.max(0,Number(t.watchLastPositionSeconds||0)),
     movie:(hasAssignedVideo||t.movieTitle||t.moviePosterUrl)?{id:t.movieId??null,title:movieTitle,posterUrl:moviePosterUrl,releaseDate:movieReleaseDate}:null,
-    video:hasAssignedVideo?{
-      provider:t.videoProvider||"youtube",videoId:t.videoId,title:t.videoTitle||movieTitle,
+    video:playableVideo?{
+      provider,videoId:rawVideoId,title:t.videoTitle||movieTitle,
       source:videoSource,videoUrl:videoSource,playable:true,
       channelId:t.videoChannelId||"",channelTitle:t.videoChannelTitle||"",thumbnailUrl:t.videoThumbnailUrl||null,
       durationSeconds:t.videoDurationSeconds??0,publishedAt:t.videoPublishedAt,categoryId:t.videoCategoryId||"",
