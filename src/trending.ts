@@ -459,8 +459,11 @@ async function discoverAndCache(cfg:TrendingConfig){
     throw error;
   }
 }
-// MOJO uses licensed, direct-stream video sources only. No YouTube API,
-// iframe, embed, search, or cached YouTube record is used by live task flows.
+// Prefer the existing, validated Hollywood YouTube catalog so tasks play in
+// YouTube's official embed player. When the catalog is empty, attempt a
+// rate-limited discovery using the server-only YOUTUBE_API_KEY; if discovery
+// is unavailable, use the curated static studio-video catalog as a safe
+// fallback. Directly hosted open movies remain the final playback fallback.
 function directOnlySelection(clientId:string,count:number){
   void clientId;
   const pool=[...OPEN_LICENSED_VIDEO_FALLBACKS].sort(()=>Math.random()-0.5);
@@ -470,7 +473,22 @@ function directOnlySelection(clientId:string,count:number){
   return selected.sort(()=>Math.random()-0.5);
 }
 export async function getTrendingVideosForClient(clientId:string,count:number){
-  return directOnlySelection(clientId,count);
+  const wanted=Math.max(1,Math.min(100,Math.trunc(Number(count)||1)));
+  try{
+    const cfg=await config();
+    let pool:TrendingVideo[]=[];
+    try{pool=await loadCache(cfg);}catch{}
+    if(!pool.length&&String(process.env.YOUTUBE_API_KEY||"").trim()){
+      try{pool=await discoverAndCache(cfg);}catch{}
+    }
+    if(!pool.length)pool=verifiedStaticPool();
+    const youtubePool=pool.filter(v=>v.provider==="youtube"&&v.videoId);
+    if(youtubePool.length){
+      try{return await selectMany(clientId,youtubePool,wanted,cfg);}
+      catch{return [...youtubePool].sort(()=>Math.random()-0.5).slice(0,wanted);}
+    }
+  }catch{}
+  return directOnlySelection(clientId,wanted);
 }
 export async function getTrendingVideoForClient(clientId:string){return (await getTrendingVideosForClient(clientId,1))[0];}
 export async function getAlternativeVideoForTask(clientId:string,_movieTitle:string|null,excludeVideoId:string|null){
