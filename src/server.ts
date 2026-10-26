@@ -372,6 +372,23 @@ app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const [u,txs,messages]=await Promise.all([prisma.user.findUniqueOrThrow({where:{id:userId}}),prisma.walletTransaction.findMany({where:{userId},orderBy:{createdAt:"desc"},take:8}),prisma.message.findMany({where:{OR:[{senderId:userId},{recipientId:userId}]},orderBy:{createdAt:"desc"},take:6})]);const bonusHistoryRow=await prisma.setting.findUnique({where:{key:bonusHistoryKey(userId)}});let bonusHistory:any[]=[];try{bonusHistory=bonusHistoryRow?.value?JSON.parse(bonusHistoryRow.value):[];}catch{}const available=Math.max(0,u.balanceCents-(u.frozenCents??0));const nextPending=tasks.find(t=>t.status===TaskStatus.PENDING);const needAmountCents=nextPending&&nextPending.taskType==="COMBINATION"&&nextPending.amountCents>available?Math.max(0,nextPending.amountCents-available):0;const pendingBonus=config.bonus&&!isBonusAcknowledgedForContent(config.bonus,bonusHistory)?config.bonus:null;const vipBenefits=await Promise.all(["VIP1","VIP2","VIP3","VIP4"].map(async vip=>{const rule=await getVipRule(vip);return {vipLevel:vip,taskCount:rule.taskCount,commissionRateBps:rule.commissionRateBps};}));
   res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),taskConfig:{taskCount:session?.generatedTaskCount??config.taskCount,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,combinationTaskRound:config.combinationTaskRound,bonus:pendingBonus,bonusHistory,needAmountCents,displayBalanceCents:needAmountCents>0?0:available},vipBenefits,benefitRules:[{days:5,label:"Milestone benefit"},{days:15,label:"Enhanced milestone benefit"},{days:30,label:"Extended milestone benefit"}],transactions:txs,messages});
 }));
+app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const candidates=await getCurrentTrailerCandidates();
+  const movies=candidates.map(video=>({
+    title:video.movieTitle||normalizeMovieTitle(video.title),
+    poster:video.moviePosterUrl||video.thumbnailUrl,
+    moviePosterUrl:video.moviePosterUrl||video.thumbnailUrl,
+    thumbnailUrl:video.thumbnailUrl,
+    videoUrl:video.provider==="direct"?video.videoId:"https://www.youtube.com/watch?v="+encodeURIComponent(video.videoId),
+    videoId:video.videoId,
+    provider:video.provider,
+    description:video.description,
+    year:video.movieYear||0,
+    movieYear:video.movieYear||0
+  }));
+  res.set("Cache-Control","private, max-age=300");
+  res.json({movies});
+}));
 app.get("/api/client/leaderboard",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const now=new Date();
   const day=now.getUTCDay();
