@@ -127,6 +127,11 @@ async function readClientNotifications(userId:string):Promise<ClientNotification
   try{const value=JSON.parse(row?.value||"[]");return Array.isArray(value)?value.slice(0,100):[];}catch{return [];}
 }
 async function createClientNotification(userId:string,type:string,title:string,body:string,link="/"){
+  const prefsKey=clientNotificationPrefsKey(userId);
+  const prefsRow=await prisma.setting.findUnique({where:{key:prefsKey}});
+  let preferences:any={taskUpdates:true,walletUpdates:true,announcements:true};try{preferences={...preferences,...JSON.parse(prefsRow?.value||"{}")};}catch{}
+  const preferenceKey=type==="task"?"taskUpdates":type==="wallet"?"walletUpdates":"announcements";
+  if(preferences[preferenceKey]===false)return null;
   const key=clientNotificationKey(userId);
   const row=await prisma.setting.findUnique({where:{key}});
   let items:ClientNotification[]=[];try{const value=JSON.parse(row?.value||"[]");if(Array.isArray(value))items=value;}catch{}
