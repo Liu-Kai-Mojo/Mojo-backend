@@ -430,16 +430,41 @@ async function discoverAndCache(cfg:TrendingConfig){
 }
 // MOJO uses licensed, direct-stream video sources only. No YouTube API,
 // iframe, embed, search, or cached YouTube record is used by live task flows.
-function directOnlySelection(clientId:string,count:number){
-  void clientId;
-  const pool=[...OPEN_LICENSED_VIDEO_FALLBACKS].sort(()=>Math.random()-0.5);
-  const wanted=Math.max(1,Math.min(100,Math.trunc(Number(count)||1)));
-  const selected:TrendingVideo[]=[];
-  for(let i=0;i<wanted;i++)selected.push({...pool[i%pool.length]});
-  return selected.sort(()=>Math.random()-0.5);
+const playableVideoChecks=new Map<string,{ok:boolean;checkedAt:number}>();
+function shuffleVideos<T>(items:T[]):T[]{
+  const result=[...items];
+  for(let i=result.length-1;i>0;i--){const j=randomInt(i+1);[result[i],result[j]]=[result[j],result[i]];}
+  return result;
+}
+async function isDirectVideoPlayable(url:string):Promise<boolean>{
+  const cached=playableVideoChecks.get(url);
+  if(cached&&Date.now()-cached.checkedAt<10*60_000)return cached.ok;
+  let ok=false;
+  try{
+    const response=await fetch(url,{method:"GET",headers:{Range:"bytes=0-1",Accept:"video/*"},signal:AbortSignal.timeout(6500),redirect:"follow"});
+    const type=String(response.headers.get("content-type")||"").toLowerCase();
+    ok=(response.status===200||response.status===206)&&
+      (type.startsWith("video/")||type.includes("octet-stream"));
+    await response.body?.cancel().catch(()=>{});
+  }catch{ok=false;}
+  playableVideoChecks.set(url,{ok,checkedAt:Date.now()});
+  if(playableVideoChecks.size>200){for(const [key,value] of playableVideoChecks){if(Date.now()-value.checkedAt>20*60_000)playableVideoChecks.delete(key);}}
+  return ok;
 }
 export async function getTrendingVideosForClient(clientId:string,count:number){
-  return directOnlySelection(clientId,count);
+  const wanted=Math.max(1,Math.min(100,Math.trunc(Number(count)||1)));
+  const recentRows=await prisma.task.findMany({where:{clientId,videoProvider:"direct",videoId:{not:null}},select:{videoId:true},orderBy:{createdAt:"desc"},take:Math.max(8,Math.min(30,wanted*2))}).catch(()=>[]);
+  const recent=new Set(recentRows.map(row=>String(row.videoId||"")));
+  const shuffled=shuffleVideos(OPEN_LICENSED_VIDEO_FALLBACKS);
+  const validated=await Promise.all(shuffled.map(async video=>({video,ok:await isDirectVideoPlayable(video.videoId)})));
+  const playable=validated.filter(row=>row.ok).map(row=>row.video);
+  if(!playable.length)throw providerError("NO_PLAYABLE_VIDEO","No licensed video source is responding right now. Please try again shortly.");
+  const fresh=shuffleVideos(playable.filter(video=>!recent.has(video.videoId)));
+  const fallback=shuffleVideos(playable.filter(video=>recent.has(video.videoId)));
+  const pool=[...fresh,...fallback];
+  const selected:TrendingVideo[]=[];
+  while(selected.length<wanted){selected.push({...pool[selected.length%pool.length]});}
+  return selected;
 }
 export async function getTrendingVideoForClient(clientId:string){return (await getTrendingVideosForClient(clientId,1))[0];}
 export async function getAlternativeVideoForTask(clientId:string,_movieTitle:string|null,excludeVideoId:string|null){
