@@ -810,6 +810,7 @@ app.post("/api/admin/wallet-requests/:id/decision",auth([Role.ADMIN]),asyncRoute
     return {request:updated,user:await tx.user.findUniqueOrThrow({where:{id:request.userId}})};
   },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
   const publicRequest=walletRequestPublic({...result.request,user:result.user});
+  await createClientNotification(result.request.userId,"wallet",`${result.request.type==="DEPOSIT"?"Deposit":"Withdrawal"} request ${result.request.status.toLowerCase()}`,`Your ${result.request.type.toLowerCase()} request has been ${result.request.status.toLowerCase()}.`,"/wallet");
   publishRealtime(res.locals.auth.sub,"wallet_request_decided",{request:publicRequest,user:safeUser(result.user)});
   publishRealtime(result.user.id,"wallet_request_decided",{request:publicRequest,user:safeUser(result.user)});
   await audit(res.locals.auth.sub,result.user.id,d.decision==="APPROVE"?"WALLET_REQUEST_APPROVED":"WALLET_REQUEST_REJECTED",{requestId:id,type:result.request.type,amountCents:result.request.amountCents});
