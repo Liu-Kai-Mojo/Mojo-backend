@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { prisma } from "./prisma.js";
 import { uniqueSettingId } from "./utils/codes.js";
 import { getEligibleHollywoodMovies, isEligibleHollywoodMovie, moviePosterIsUsable, type EligibleMovie } from "./movieCatalog.js";
