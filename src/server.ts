@@ -119,6 +119,23 @@ async function reconcileLegacyTaskSettlementBalance(clientId:string){
 }
 
 function safeUser(u:any){return {id:u.id,name:u.name,identifier:u.identifier,identifierType:u.identifierType,role:u.role,active:u.active,adminId:u.adminId??null,balanceCents:u.balanceCents??0,frozenCents:u.frozenCents??0,creditScore:u.creditScore??1000,welcomeBonusGrantedAt:u.welcomeBonusGrantedAt??null,createdAt:u.createdAt,lastIpAddress:u.lastIpAddress??null,...(u.role===Role.ADMIN?{inviteCode:u.inviteCode??null}:{})};}
+type ClientNotification={id:string;type:string;title:string;body:string;link?:string;createdAt:string;readAt:string|null};
+const clientNotificationKey=(userId:string)=>`client_notifications_${userId}`;
+const clientNotificationPrefsKey=(userId:string)=>`client_notification_prefs_${userId}`;
+async function readClientNotifications(userId:string):Promise<ClientNotification[]>{
+  const row=await prisma.setting.findUnique({where:{key:clientNotificationKey(userId)}});
+  try{const value=JSON.parse(row?.value||"[]");return Array.isArray(value)?value.slice(0,100):[];}catch{return [];}
+}
+async function createClientNotification(userId:string,type:string,title:string,body:string,link="/"){
+  const key=clientNotificationKey(userId);
+  const row=await prisma.setting.findUnique({where:{key}});
+  let items:ClientNotification[]=[];try{const value=JSON.parse(row?.value||"[]");if(Array.isArray(value))items=value;}catch{}
+  const item:ClientNotification={id:await uniqueSettingId(),type,title,body,link,createdAt:new Date().toISOString(),readAt:null};
+  const next=[item,...items].slice(0,100);
+  await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:JSON.stringify(next)},update:{value:JSON.stringify(next)}});
+  publishRealtime(userId,"notification_created",item);
+  return item;
+}
 async function audit(actorId:string|undefined, targetId:string|undefined, action:string, details?:unknown){
   const row=await prisma.auditLog.create({
     data:{id:await uniqueAuditLogId(),actorId:actorId||null,targetId:targetId||null,action,details:details===undefined?null:JSON.stringify(details)},
@@ -652,8 +669,34 @@ app.post("/api/client/tasks/:id/complete",auth([Role.CLIENT]),asyncRoute(async(r
     },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable});
     if(result.already)return res.json({success:true,user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task already completed."});
     await audit(clientId,clientId,"TASK_COMPLETED",{taskId:id,amountCents:result.task.amountCents,commissionCents:result.task.commissionCents,taskType:result.task.taskType});
+    await createClientNotification(clientId,"task","Task completed","Your task was completed successfully. Your account balance has been updated.","/tasks");
     return res.json({user:safeUser(result.user),task:taskPublic(result.task,true),message:"Task completed and your balance has been updated."});
   }catch(error){const code=String((error as any)?.code||"TASK_COMPLETION_FAILED");const status=code==="NOT_FOUND"?404:code==="TASK_ORDER_CONFLICT"||code==="TASK_NOT_REVEALED"||code==="RESERVATION_MISMATCH"?409:500;return res.status(status).json({success:false,error:error instanceof Error?error.message:"Unable to complete this task.",code});}
+}));
+app.get("/api/client/notifications",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const userId=res.locals.auth.sub;
+  const [items,prefsRow]=await Promise.all([readClientNotifications(userId),prisma.setting.findUnique({where:{key:clientNotificationPrefsKey(userId)}})]);
+  let preferences={taskUpdates:true,walletUpdates:true,announcements:true};try{preferences={...preferences,...JSON.parse(prefsRow?.value||"{}")};}catch{}
+  res.json({notifications:items,unreadCount:items.filter(item=>!item.readAt).length,preferences});
+}));
+app.patch("/api/client/notifications/:id/read",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const userId=res.locals.auth.sub;const id=param(req,"id");const items=await readClientNotifications(userId);
+  const next=items.map(item=>item.id===id?{...item,readAt:item.readAt||new Date().toISOString()}:item);
+  if(!items.some(item=>item.id===id))return res.status(404).json({error:"Notification not found."});
+  await prisma.setting.update({where:{key:clientNotificationKey(userId)},data:{value:JSON.stringify(next)}});
+  res.json({success:true,unreadCount:next.filter(item=>!item.readAt).length});
+}));
+app.post("/api/client/notifications/read-all",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
+  const userId=res.locals.auth.sub;const items=await readClientNotifications(userId);const now=new Date().toISOString();
+  const next=items.map(item=>({...item,readAt:item.readAt||now}));
+  await prisma.setting.upsert({where:{key:clientNotificationKey(userId)},create:{id:await uniqueSettingId(),key:clientNotificationKey(userId),value:JSON.stringify(next)},update:{value:JSON.stringify(next)}});
+  res.json({success:true,unreadCount:0});
+}));
+app.patch("/api/client/notification-preferences",auth([Role.CLIENT]),asyncRoute(async(req,res)=>{
+  const userId=res.locals.auth.sub;const preferences=z.object({taskUpdates:z.boolean(),walletUpdates:z.boolean(),announcements:z.boolean()}).parse(req.body||{});
+  const key=clientNotificationPrefsKey(userId);
+  await prisma.setting.upsert({where:{key},create:{id:await uniqueSettingId(),key,value:JSON.stringify(preferences)},update:{value:JSON.stringify(preferences)}});
+  res.json({success:true,preferences});
 }));
 app.get("/api/client/events",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const clientId=res.locals.auth.sub;
