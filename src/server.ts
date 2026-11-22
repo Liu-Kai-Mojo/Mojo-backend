@@ -696,10 +696,7 @@ app.patch("/api/client/notification-preferences",auth([Role.CLIENT]),asyncRoute(
 app.get("/api/client/events",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const clientId=res.locals.auth.sub;
   res.status(200).setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-cache, no-transform");res.setHeader("Connection","keep-alive");res.flushHeaders?.();
-  addRealtimeClient(clientId,res);res.write(`event: ready\
-data: ${JSON.stringify({ok:true,subject:clientId})}\
-\
-`);
+  addRealtimeClient(clientId,res);res.write("event: ready\ndata: "+JSON.stringify({ok:true,subject:clientId})+"\n\n");
 }));
 app.get("/api/client/wallet-requests",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   const rows=await prisma.walletRequest.findMany({where:{userId:res.locals.auth.sub},orderBy:{createdAt:"desc"},take:50});
@@ -774,10 +771,7 @@ const staff=[Role.OWNER,Role.ADMIN];
 app.get("/api/admin/events",auth([Role.ADMIN]),asyncRoute(async(_req,res)=>{
   const adminId=res.locals.auth.sub;
   res.status(200).setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-cache, no-transform");res.setHeader("Connection","keep-alive");res.flushHeaders?.();
-  addRealtimeClient(adminId,res);res.write(`event: ready\
-data: ${JSON.stringify({ok:true,subject:adminId})}\
-\
-`);
+  addRealtimeClient(adminId,res);res.write("event: ready\ndata: "+JSON.stringify({ok:true,subject:adminId})+"\n\n");
 }));
 app.get("/api/admin/wallet-requests",auth([Role.ADMIN]),asyncRoute(async(req,res)=>{
   const uid=String(req.query.uid||"").trim();
