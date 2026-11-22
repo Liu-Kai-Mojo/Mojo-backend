@@ -10,7 +10,7 @@ import { prisma } from "./prisma.js";
 import { auth, hashPassword, verifyPassword, issueToken } from "./auth.js";
 import { registerSchema, loginSchema, movieSchema, messageSchema, taskSchema } from "./validation.js";
 import { uniqueUserId, uniqueMovieId, uniqueHistoryId, uniqueMessageId, uniqueSettingId, uniqueWalletTransactionId, uniqueWalletRequestId, uniqueTaskId, uniqueInviteCode, uniqueAuditLogId, uniqueTaskSessionId } from "./utils/codes.js";
-import { getCurrentTrailerCandidates, getTrendingVideosForClient, trendingConfig, normalizeMovieTitle } from "./trending.js";
+import { getTrendingVideosForClient, trendingConfig, normalizeMovieTitle } from "./trending.js";
 import { combinationFundingShortfallCents, isBonusAcknowledgedForContent, isProcessingTask } from "./taskEngineRules.js";
 
 const app=express();
