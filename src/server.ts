@@ -398,18 +398,13 @@ app.get("/api/client/home",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
   res.json({user:safeUser(u),tasks:tasks.map(t=>taskPublic(t,false)),taskConfig:{taskCount:session?.generatedTaskCount??config.taskCount,resetCount:config.resetCount,vipLevel:session?.vipLevel??config.vipLevel,requiredDepositCents:config.requiredDepositCents,amountCents:config.amountCents,combinationTaskCount:config.combinationTaskCount,combinationTaskAmountCents:config.combinationTaskAmountCents,combinationTaskRound:config.combinationTaskRound,bonus:pendingBonus,bonusHistory,needAmountCents,displayBalanceCents:needAmountCents>0?0:available},vipBenefits,benefitRules:[{days:5,label:"Milestone benefit"},{days:15,label:"Enhanced milestone benefit"},{days:30,label:"Extended milestone benefit"}],transactions:txs,messages});
 }));
 app.get("/api/client/movies",auth([Role.CLIENT]),asyncRoute(async(_req,res)=>{
-  const candidates=await getCurrentTrailerCandidates();
-  const movies=candidates.map(video=>({
-    title:video.movieTitle||normalizeMovieTitle(video.title),
-    poster:video.moviePosterUrl||video.thumbnailUrl,
-    moviePosterUrl:video.moviePosterUrl||video.thumbnailUrl,
-    thumbnailUrl:video.thumbnailUrl,
-    videoUrl:video.provider==="direct"?video.videoId:"https://www.youtube.com/watch?v="+encodeURIComponent(video.videoId),
-    videoId:video.videoId,
-    provider:video.provider,
-    description:video.description,
-    year:video.movieYear||0,
-    movieYear:video.movieYear||0
+  // Movie artwork is sourced only from the curated Movie catalogue. Never
+  // substitute a video thumbnail: a trailer frame is not a theatrical poster.
+  const catalogue=await prisma.movie.findMany({where:{published:true,posterUrl:{not:""}},orderBy:[{rating:"desc"},{year:"desc"}],take:30,select:{id:true,title:true,posterUrl:true,description:true,year:true,rating:true}});
+  const movies=catalogue.filter(movie=>/^https:\/\//i.test(movie.posterUrl)).map(movie=>({
+    id:movie.id,title:movie.title,poster:movie.posterUrl,moviePosterUrl:movie.posterUrl,
+    thumbnailUrl:"",videoUrl:"https://www.youtube.com/results?search_query="+encodeURIComponent(movie.title+" official trailer"),
+    description:movie.description,year:movie.year,rating:movie.rating
   }));
   res.set("Cache-Control","private, max-age=300");
   res.json({movies});
