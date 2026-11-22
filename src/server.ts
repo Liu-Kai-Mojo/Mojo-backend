@@ -296,7 +296,7 @@ function taskPublic(t:any,includeValues=false){
   const blockedCombination=!completed&&String(t.taskType||"")=="COMBINATION"&&Math.max(0,Number(t.reservedAmountCents||0))<=0;
   const hasAssignedVideo=Boolean(t.videoId)&&!blockedCombination;
   const movieTitle=normalizeMovieTitle(String(t.movieTitle||t.videoTitle||t.title||"").trim());
-  const moviePosterUrl=String(t.moviePosterUrl||t.videoThumbnailUrl||"").trim();
+  const moviePosterUrl=String(t.moviePosterUrl||"").trim();
   const movieReleaseDate=t.movieReleaseDate||t.videoPublishedAt||null;
   const provider=String(t.videoProvider||"youtube").toLowerCase();
   const storedVideoId=String(t.videoId||"").trim();
