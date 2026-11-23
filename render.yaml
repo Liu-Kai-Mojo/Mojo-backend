@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: mojo-backend
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_ORIGINS
+        value: https://box-office-mojo.pages.dev,https://mojo-client.pages.dev,https://mojo-admin.pages.dev,https://mojo-administrator.pages.dev,https://mojo-owner.pages.dev
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
